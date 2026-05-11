@@ -3,8 +3,19 @@ body {
   margin: 0;
   padding: 0;
   color-scheme: light dark;
-  background: Canvas;
+  background-color: Canvas;
   color: CanvasText;
+}
+
+@media (prefers-color-scheme: light) {
+  html,
+  body {
+    background-color: #f6f6f6 !important;
+  }
+
+  .app {
+    background: #f6f6f6;
+  }
 }
 
 [hidden] {
@@ -629,6 +640,38 @@ button:hover {
   padding: 10px 12px;
 }
 
+.dock {
+  margin: 0;
+  padding: 12px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--borderSoft);
+  background: var(--panel);
+  box-shadow:
+    0 10px 30px var(--panelShadow),
+    0 2px 10px rgba(20, 20, 26, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+@media (prefers-color-scheme: light) {
+  .dock {
+    background: #fff;
+    border-color: color-mix(in srgb, CanvasText 8%, Canvas 92%);
+    box-shadow:
+      0 12px 32px rgba(20, 20, 26, 0.06),
+      0 2px 10px rgba(20, 20, 26, 0.03);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .dock {
+    box-shadow:
+      0 10px 30px var(--panelShadow),
+      0 2px 10px rgba(0, 0, 0, 0.22);
+  }
+}
+
 .queueTitle {
   font-size: 12px;
   opacity: 0.7;
@@ -755,14 +798,12 @@ button:hover {
 }
 
 .player {
-  margin: 0 12px 4px;
-  padding: 12px 12px;
-  border: 1px solid var(--borderSoft);
-  background: var(--panel);
-  border-radius: 18px;
-  box-shadow:
-    0 10px 30px var(--panelShadow),
-    0 2px 10px rgba(20, 20, 26, 0.04);
+  margin: 0;
+  padding: 0 0 10px;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .playerMain {
@@ -900,7 +941,8 @@ button:hover {
 }
 
 .composer {
-  padding: 0 12px 12px;
+  padding: 10px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--borderSoft) 85%, transparent);
 }
 
 .composerBar {
@@ -908,20 +950,16 @@ button:hover {
   flex-direction: column;
   align-items: stretch;
   gap: 10px;
-  padding: 12px 12px;
-  border-radius: 18px;
-  border: 1px solid var(--borderSoft);
-  background: var(--panel);
-  box-shadow:
-    0 10px 30px var(--panelShadow),
-    0 2px 10px rgba(20, 20, 26, 0.04);
+  padding: 0;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 @media (prefers-color-scheme: dark) {
   .composerBar {
-    box-shadow:
-      0 10px 30px var(--panelShadow),
-      0 2px 10px rgba(0, 0, 0, 0.22);
+    box-shadow: none;
   }
 }
 

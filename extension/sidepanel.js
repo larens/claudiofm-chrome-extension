@@ -418,6 +418,24 @@ function showRecommendPush(tracks, defaultSegue) {
   const list = Array.isArray(tracks) ? tracks : [];
   if (!list.length) return;
 
+  const pushQueue = async (segueText) => {
+    segueSpokenInQueue = 0;
+    const next = [];
+    const text = String(segueText || "").trim();
+    if (text) next.push(buildSegueItem(text));
+    next.push(
+      ...list.map((t) => ({
+        ...t,
+        streamUrl: (t?.streamUrl || "").replace(/`/g, "").trim(),
+        provider: t?.provider || "pending",
+      }))
+    );
+    setHint(`已推送 ${list.length} 首新歌单，正在播放`);
+    try {
+      await sendPlayerCommand("player.replaceQueueAndPlay", { queue: next, startIndex: 0 });
+    } catch {}
+  };
+
   const wrap = document.createElement("div");
   wrap.className = "recommendCard";
 
@@ -440,21 +458,7 @@ function showRecommendPush(tracks, defaultSegue) {
   push.addEventListener("click", async () => {
     const segueText = String(textarea.value || "").trim();
     clearRecommendCard();
-    segueSpokenInQueue = 0;
-
-    const next = [];
-    if (segueText) next.push(buildSegueItem(segueText));
-    next.push(
-      ...list.map((t) => ({
-        ...t,
-        streamUrl: (t?.streamUrl || "").replace(/`/g, "").trim(),
-        provider: t?.provider || "pending",
-      }))
-    );
-    setHint(`已推送 ${list.length} 首新歌单，正在播放`);
-    try {
-      await sendPlayerCommand("player.replaceQueueAndPlay", { queue: next, startIndex: 0 });
-    } catch {}
+    await pushQueue(segueText);
   });
 
   const cancel = document.createElement("button");
@@ -470,6 +474,8 @@ function showRecommendPush(tracks, defaultSegue) {
   wrap.appendChild(actions);
   recommendCardEl = wrap;
   appendChatNode(wrap);
+
+  void pushQueue(defaultSegue);
 }
 
 function scheduleSessionSave() {
