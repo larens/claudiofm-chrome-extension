@@ -1266,23 +1266,15 @@ async function requestLyricInterlude(tracks) {
 }
 
 function speak(text) {
-  const s = String(text || "").trim();
-  if (!s) return;
-  if (speechActive) return;
-  void (async () => {
-    const modelOk = await playModelTtsBlocking(s);
-    if (modelOk) return;
-    if (!("speechSynthesis" in window)) return;
-    refreshVoiceCache();
-    const u = new SpeechSynthesisUtterance(s);
-    u.lang = "zh-CN";
-    const v = pickVoiceById(ttsVoiceId);
-    if (v) u.voice = v;
-    try {
-      window.speechSynthesis.cancel();
-    } catch {}
-    window.speechSynthesis.speak(u);
-  })();
+  if (!text) return;
+  if (!("speechSynthesis" in window)) return;
+  refreshVoiceCache();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "zh-CN";
+  const v = pickVoiceById(ttsVoiceId);
+  if (v) u.voice = v;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(u);
 }
 
 function shouldSpeakSegue() {
@@ -1305,12 +1297,14 @@ async function handleAssistantResult(result) {
     return;
   }
 
-  const parts = [];
-  if (result.say) parts.push(result.say);
-  if (result.reason) parts.push(result.reason);
-  if (parts.length) appendMessage("assistant", parts.join("\n\n"));
-
   const hasTracks = Array.isArray(result.play) && result.play.length > 0;
+  const parts = [];
+  const say = result.say != null ? String(result.say).trim() : "";
+  const reason = result.reason != null ? String(result.reason).trim() : "";
+  if (say) parts.push(say);
+  if (reason) parts.push(reason);
+  if (parts.length) appendMessage("assistant", parts.join("\n\n"));
+  else if (!hasTracks) appendMessage("assistant", "未收到有效回复");
   const shouldPrefixSegue = hasTracks && queueIndex === -1 && queue.length === 0 && result.segue;
   if (!shouldPrefixSegue && result.segue && shouldSpeakSegue()) {
     segueSpokenInQueue += 1;

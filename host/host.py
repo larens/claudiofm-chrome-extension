@@ -799,7 +799,7 @@ def build_schema():
     return {
         "type": "object",
         "properties": {
-            "say": {"type": "string"},
+            "say": {"type": "string", "minLength": 1},
             "reason": {"type": "string"},
             "play": {
                 "type": "array",
@@ -868,6 +868,7 @@ def build_prompt(input_data):
         "你的任务：根据用户消息、画像摘要、场景信息，给出电台式回应。",
         f"当前音源来源偏好：{provider}。",
         "必须输出 JSON，字段遵循给定 schema。",
+        "无论 forceRecommend 是否为 true，say 都必须对用户消息做出明确回应，禁止输出空字符串或只包含空白。",
         "当 forceRecommend=true 时，必须推荐 5-10 首歌（play 长度 5-10，segue 需要可口播）。",
         "当 forceRecommend=false 时：只有在用户明确在聊音乐/想听歌/要推荐/要歌单时才推荐 5-10 首歌；否则 play 输出空数组，segue 输出空字符串。",
         "每首歌只输出 name/artist；album/query/provider 可选。",
