@@ -63,6 +63,19 @@ function sendNative(payload) {
   });
 }
 
+async function sendNativeWithTimeout(payload, timeoutMs = 1200) {
+  const timeoutResp = new Promise((resolve) => {
+    setTimeout(() => resolve({ ok: false, error: "timeout" }), timeoutMs);
+  });
+  try {
+    const resp = await Promise.race([sendNative(payload), timeoutResp]);
+    return resp;
+  } catch (e) {
+    const message = e?.message ? String(e.message) : String(e);
+    return { ok: false, error: message };
+  }
+}
+
 async function appendDailyConversation(kind, userText, result) {
   return await sendNative({
     type: "appendDailyConversation",
@@ -279,14 +292,63 @@ function demoStreamUrl(track) {
 }
 
 async function resolveTrackWithFallback(track) {
+  try {
+    const query = normalizeTrackQuery(track);
+    if (query?.name && query?.artist) {
+      const cached = await sendNativeWithTimeout({ type: "getCachedTrack", track: query }, 900);
+      if (cached?.ok && cached?.hit && cached?.resolved?.streamUrl) {
+        return cached.resolved;
+      }
+    }
+  } catch {}
+
   const directResult = await resolveTrackViaFetch(track);
-  if (directResult?.streamUrl) return directResult;
+  if (directResult?.streamUrl) {
+    try {
+      const query = normalizeTrackQuery(track);
+      if (query?.name && query?.artist) {
+        void sendNativeWithTimeout({ type: "cacheTrack", track: query, resolved: directResult }, 1200);
+      }
+    } catch {}
+    return directResult;
+  }
 
   const tabResult = await resolveTrackViaProviderTab(track);
-  if (tabResult?.streamUrl) return tabResult;
+  if (tabResult?.streamUrl) {
+    try {
+      const query = normalizeTrackQuery(track);
+      if (query?.name && query?.artist) {
+        void sendNativeWithTimeout({ type: "cacheTrack", track: query, resolved: tabResult }, 1200);
+      }
+    } catch {}
+    return tabResult;
+  }
 
   console.warn("[background] resolveTrack failed", { track });
   return null;
+}
+
+async function warmCacheTracks(tracks) {
+  const list = Array.isArray(tracks) ? tracks : [];
+  const cleaned = list
+    .map((t) => normalizeTrackQuery(t))
+    .filter((t) => t?.name && t?.artist)
+    .slice(0, 10);
+  if (!cleaned.length) return;
+
+  for (const t of cleaned) {
+    try {
+      const cached = await sendNativeWithTimeout({ type: "getCachedTrack", track: t }, 600);
+      if (cached?.ok && cached?.hit) continue;
+      const resolved = await Promise.race([
+        resolveTrackViaFetch(t),
+        new Promise((resolve) => setTimeout(() => resolve(null), 6500)),
+      ]);
+      if (resolved?.streamUrl) {
+        void sendNativeWithTimeout({ type: "cacheTrack", track: t, resolved }, 1200);
+      }
+    } catch {}
+  }
 }
 
 function isMusicIntent(text) {
@@ -301,7 +363,24 @@ async function onChat(text) {
   await chrome.storage.local.set({ turnCount: nextTurnCount });
 
   const { profileSummary } = await chrome.storage.local.get("profileSummary");
+  const { trackVotesV1 } = await chrome.storage.local.get("trackVotesV1");
   const prefs = await getPreferences();
+
+  const votes = trackVotesV1 && typeof trackVotesV1 === "object" ? trackVotesV1 : {};
+  const likedTracks = [];
+  const dislikedTracks = [];
+  Object.entries(votes).forEach(([key, v]) => {
+    const vote = Number(v);
+    if (vote !== 1 && vote !== -1) return;
+    const k = String(key || "");
+    const parts = k.split("|");
+    if (parts.length < 2) return;
+    const name = parts[0] ? String(parts[0]).trim() : "";
+    const artist = parts[1] ? String(parts[1]).trim() : "";
+    if (!name || !artist) return;
+    if (vote === 1) likedTracks.push({ name, artist });
+    else dislikedTracks.push({ name, artist });
+  });
 
   const payload = {
     type: "chat",
@@ -312,6 +391,8 @@ async function onChat(text) {
     turnCountSinceLastProfileRefresh: nextTurnCount % 3,
     forceProfileRefresh: nextTurnCount % 3 === 0,
     forceRecommend: isMusicIntent(text),
+    likedTracks: likedTracks.slice(0, 20),
+    dislikedTracks: dislikedTracks.slice(0, 20),
   };
 
   const resp = await sendNative(payload);
@@ -341,12 +422,22 @@ async function onChat(text) {
     } catch {}
   }
 
+  try {
+    if (resp.result && typeof resp.result === "object" && Array.isArray(resp.result.play)) {
+      resp.result.play = applyTrackVotesFilter(resp.result.play, votes);
+    }
+  } catch {}
+
   broadcast({ type: "chatResult", result: resp.result });
   try {
     await appendDailyConversation("chat", text, resp.result);
   } catch {}
   try {
     await prependListSection("chat", resp.result);
+  } catch {}
+  try {
+    const play = resp?.result?.play;
+    if (Array.isArray(play) && play.length) void warmCacheTracks(play);
   } catch {}
 
   if (nextTurnCount % 10 === 0) {
@@ -397,6 +488,37 @@ async function prependListSection(kind, result) {
     : [];
   if (!tracks.length) return { ok: true, skipped: true };
   return await sendNative({ type: "prependListSection", kind: k, tracks });
+}
+
+function normalizeVoteKey(name, artist) {
+  const strip = (v) =>
+    String(v || "")
+      .toLowerCase()
+      .trim()
+      .replace(/[\s\-_–—·•、，,。.!！?？'"“”‘’()（）【】[\]{}<>《》:：;；/\\|]+/g, "");
+  return `${strip(name)}|${strip(artist)}`;
+}
+
+function applyTrackVotesFilter(tracks, votes) {
+  const list = Array.isArray(tracks) ? tracks : [];
+  const map = votes && typeof votes === "object" ? votes : {};
+  const dislikedArtists = new Set();
+  Object.entries(map).forEach(([k, v]) => {
+    if (Number(v) !== -1) return;
+    const parts = String(k || "").split("|");
+    if (parts.length < 2) return;
+    const artist = parts[1] ? String(parts[1]).trim() : "";
+    if (artist) dislikedArtists.add(artist);
+  });
+  return list.filter((t) => {
+    const name = t?.name ? String(t.name).trim() : "";
+    const artist = t?.artist ? String(t.artist).trim() : "";
+    if (!name || !artist) return false;
+    const key = normalizeVoteKey(name, artist);
+    if (Number(map[key]) === -1) return false;
+    if (dislikedArtists.has(artist)) return false;
+    return true;
+  });
 }
 
 async function prependListSectionTracks(kind, tracks) {
@@ -473,6 +595,8 @@ async function maybeWelcome(port) {
 
     const prefs = await getPreferences();
     const { profileSummary } = await chrome.storage.local.get("profileSummary");
+    const { trackVotesV1 } = await chrome.storage.local.get("trackVotesV1");
+    const votes = trackVotesV1 && typeof trackVotesV1 === "object" ? trackVotesV1 : {};
 
     const loc = await requestLocationFromPort(port);
     const lat = loc?.coords?.latitude;
@@ -487,6 +611,8 @@ async function maybeWelcome(port) {
       templatePath: MEMORY_TEMPLATE_PATH,
       latitude: hasCoords ? lat : null,
       longitude: hasCoords ? lon : null,
+      likedTracks: [],
+      dislikedTracks: [],
     };
 
     const resp = await sendNative(payload);
@@ -502,6 +628,11 @@ async function maybeWelcome(port) {
           });
         } catch {}
       }
+      try {
+        if (resp.result && typeof resp.result === "object" && Array.isArray(resp.result.play)) {
+          resp.result.play = applyTrackVotesFilter(resp.result.play, votes);
+        }
+      } catch {}
       broadcast({ type: "chatResult", result: resp.result });
       try {
         await appendDailyConversation("welcome", "", resp.result);
@@ -579,6 +710,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
       if (msg.type === "resolveTrack") {
         const res = await resolveTrackWithFallback(msg.track);
+        sendResponse(res);
+        return;
+      }
+      if (msg.type === "getCachedTrack") {
+        const query = normalizeTrackQuery(msg.track);
+        if (!query?.name || !query?.artist) {
+          sendResponse({ ok: false, error: "invalid track" });
+          return;
+        }
+        const res = await sendNativeWithTimeout({ type: "getCachedTrack", track: query }, 900);
         sendResponse(res);
         return;
       }

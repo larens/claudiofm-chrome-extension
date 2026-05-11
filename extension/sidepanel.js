@@ -18,6 +18,7 @@ function safePost(msg) {
 const elChat = document.getElementById("chat");
 const elInput = document.getElementById("input");
 const elSend = document.getElementById("send");
+const elBtnClear = document.getElementById("btnClear");
 const elBtnMic = document.getElementById("btnMic");
 const elComposerHint = document.getElementById("composerHint");
 const elAvatarBtn = document.getElementById("avatarBtn");
@@ -47,6 +48,8 @@ const elHistoryTitle = document.getElementById("historyTitle");
 const elHistoryStatus = document.getElementById("historyStatus");
 const elHistoryList = document.getElementById("historyList");
 const elHistoryDetail = document.getElementById("historyDetail");
+const elHistoryDetailCoverBox = document.getElementById("historyDetailCoverBox");
+const elHistoryDetailCover = document.getElementById("historyDetailCover");
 const elHistoryDetailName = document.getElementById("historyDetailName");
 const elHistoryDetailArtist = document.getElementById("historyDetailArtist");
 const elHistoryDetailRaw = document.getElementById("historyDetailRaw");
@@ -60,6 +63,7 @@ const elSettingsDjNameInput = document.getElementById("settingsDjNameInput");
 const elSettingsDjNameSave = document.getElementById("settingsDjNameSave");
 const elTtsVoiceCount = document.getElementById("ttsVoiceCount");
 const elTtsVoiceSelect = document.getElementById("ttsVoiceSelect");
+const elSettingsKeepSession = document.getElementById("settingsKeepSession");
 
 const elTrackTitle = document.getElementById("trackTitle");
 const elTrackTime = document.getElementById("trackTime");
@@ -101,10 +105,20 @@ let segmentTarget = 0;
 let segmentTracks = [];
 let interludeInFlight = false;
 
+const SESSION_KEY = "sidepanelSessionV1";
+let keepSessionOnClose = true;
+let sessionMessages = [];
+let sessionSaveTimer = null;
+
+const TRACK_VOTES_KEY = "trackVotesV1";
+let trackVotes = {};
+
 let historySections = [];
 let historySelectedIndex = -1;
 let historyView = "list";
 let historyPath = "";
+let historyCoverByKey = {};
+let historyCoverRenderToken = 0;
 
 if (elDjDisplay) elDjDisplay.hidden = false;
 
@@ -374,12 +388,137 @@ function setDjNameUI(name) {
   elDjNameText.textContent = djName;
 }
 
-function appendMessage(role, text) {
+function appendMessageDom(role, text) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   div.textContent = text;
   elChat.appendChild(div);
   elChat.scrollTop = elChat.scrollHeight;
+}
+
+function sanitizeQueueForStorage(list) {
+  const tracks = Array.isArray(list) ? list : [];
+  return tracks.slice(0, 800).map((t) => {
+    if (!t || typeof t !== "object") return t;
+    const next = { ...t };
+    const cover = next.cover ? String(next.cover) : "";
+    if (cover.startsWith("data:") && cover.length > 3500) {
+      delete next.cover;
+    }
+    return next;
+  });
+}
+
+function scheduleSessionSave() {
+  if (!keepSessionOnClose) return;
+  if (sessionSaveTimer) clearTimeout(sessionSaveTimer);
+  sessionSaveTimer = setTimeout(() => {
+    sessionSaveTimer = null;
+    void saveSessionNow();
+  }, 500);
+}
+
+async function saveSessionNow() {
+  if (!keepSessionOnClose) return;
+  const payload = {
+    messages: sessionMessages.slice(-220),
+    queue: sanitizeQueueForStorage(queue),
+    queueIndex,
+  };
+  try {
+    await chrome.storage.local.set({ [SESSION_KEY]: payload });
+  } catch {}
+}
+
+async function clearSavedSession() {
+  try {
+    await chrome.storage.local.remove(SESSION_KEY);
+  } catch {}
+}
+
+async function restoreSessionIfAny() {
+  if (!keepSessionOnClose) return;
+  let stored = null;
+  try {
+    const resp = await chrome.storage.local.get(SESSION_KEY);
+    stored = resp ? resp[SESSION_KEY] : null;
+  } catch {
+    stored = null;
+  }
+  if (!stored || typeof stored !== "object") return;
+
+  const msgs = Array.isArray(stored.messages) ? stored.messages : [];
+  const nextQueue = Array.isArray(stored.queue) ? stored.queue : [];
+  const nextIndex = Number.isFinite(stored.queueIndex) ? stored.queueIndex : -1;
+
+  sessionMessages = [];
+  if (elChat) elChat.innerHTML = "";
+  msgs.slice(-220).forEach((m) => {
+    const role = m?.role ? String(m.role) : "";
+    const text = m?.text ? String(m.text) : "";
+    if (!role || !text) return;
+    sessionMessages.push({ role, text });
+    appendMessageDom(role, text);
+  });
+
+  queue = nextQueue.slice(0, 800);
+  queueIndex = Math.max(-1, Math.min(nextIndex, queue.length - 1));
+  renderQueue();
+  elTrackTitle.textContent = queueIndex >= 0 ? buildTitle(queue[queueIndex]) : "未播放";
+  updateTimeUI(0, 0);
+  updateProgressUI(0, 0);
+  setPlayingUI(false);
+}
+
+async function loadTrackVotes() {
+  try {
+    const resp = await chrome.storage.local.get(TRACK_VOTES_KEY);
+    const raw = resp ? resp[TRACK_VOTES_KEY] : null;
+    if (raw && typeof raw === "object") {
+      trackVotes = raw;
+      return;
+    }
+  } catch {}
+  trackVotes = {};
+}
+
+async function saveTrackVotes() {
+  try {
+    await chrome.storage.local.set({ [TRACK_VOTES_KEY]: trackVotes });
+  } catch {}
+}
+
+function getVoteKeyForTrack(track) {
+  const name = track?.name ? String(track.name).trim() : "";
+  const artist = track?.artist ? String(track.artist).trim() : "";
+  if (!name || !artist) return "";
+  return normalizeHistoryKey(name, artist);
+}
+
+function renderVoteIcon(kind, active) {
+  const common = `class="btnIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"`;
+  const outline = `fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"`;
+  const solid = `fill="currentColor" stroke="none"`;
+  if (kind === "up") {
+    return active
+      ? `<svg ${common} ${solid}><path d="M7 10v11H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3zM7 10l4.6-6.7A2 2 0 0 1 13.2 2H14a2 2 0 0 1 2 2v5h3.2a2 2 0 0 1 2 2.5l-1.4 6A3 3 0 0 1 16.9 20H9a2 2 0 0 1-2-2V10h0z"/></svg>`
+      : `<svg ${common} ${outline}><path d="M7 10v11H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3zM7 10l4.6-6.7A2 2 0 0 1 13.2 2H14a2 2 0 0 1 2 2v5h3.2a2 2 0 0 1 2 2.5l-1.4 6A3 3 0 0 1 16.9 20H9a2 2 0 0 1-2-2V10h0z"/></svg>`;
+  }
+  return active
+    ? `<svg ${common} ${solid}><path d="M17 14V3h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3zM17 14l-4.6 6.7A2 2 0 0 1 10.8 22H10a2 2 0 0 1-2-2v-5H4.8a2 2 0 0 1-2-2.5l1.4-6A3 3 0 0 1 7.1 4H15a2 2 0 0 1 2 2v8h0z"/></svg>`
+    : `<svg ${common} ${outline}><path d="M17 14V3h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3zM17 14l-4.6 6.7A2 2 0 0 1 10.8 22H10a2 2 0 0 1-2-2v-5H4.8a2 2 0 0 1-2-2.5l1.4-6A3 3 0 0 1 7.1 4H15a2 2 0 0 1 2 2v8h0z"/></svg>`;
+}
+
+function appendMessage(role, text) {
+  const r = String(role || "").trim();
+  const t = String(text || "");
+  if (!r) return;
+  appendMessageDom(r, t);
+  if (t.trim()) {
+    sessionMessages.push({ role: r, text: t });
+    if (sessionMessages.length > 240) sessionMessages = sessionMessages.slice(-240);
+    scheduleSessionSave();
+  }
 }
 
 function buildPlayListMessage(tracks) {
@@ -452,8 +591,50 @@ function renderQueue() {
     meta.appendChild(name);
     meta.appendChild(artist);
 
+    const actions = document.createElement("div");
+    actions.className = "queueActions";
+    const key = !isSpeechItem(t) ? getVoteKeyForTrack(t) : "";
+    const vote = key ? Number(trackVotes[key] ?? 0) : 0;
+    if (key) {
+      const likeBtn = document.createElement("button");
+      likeBtn.className = `queueVoteBtn${vote === 1 ? " active" : ""}`;
+      likeBtn.type = "button";
+      likeBtn.setAttribute("aria-label", "点赞");
+      likeBtn.dataset.kind = "up";
+      likeBtn.innerHTML = renderVoteIcon("up", vote === 1);
+      likeBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const next = vote === 1 ? 0 : 1;
+        if (next === 0) delete trackVotes[key];
+        else trackVotes[key] = 1;
+        await saveTrackVotes();
+        renderQueue();
+      });
+
+      const dislikeBtn = document.createElement("button");
+      dislikeBtn.className = `queueVoteBtn${vote === -1 ? " active" : ""}`;
+      dislikeBtn.type = "button";
+      dislikeBtn.setAttribute("aria-label", "踩");
+      dislikeBtn.dataset.kind = "down";
+      dislikeBtn.innerHTML = renderVoteIcon("down", vote === -1);
+      dislikeBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const next = vote === -1 ? 0 : -1;
+        if (next === 0) delete trackVotes[key];
+        else trackVotes[key] = -1;
+        await saveTrackVotes();
+        renderQueue();
+      });
+
+      actions.appendChild(likeBtn);
+      actions.appendChild(dislikeBtn);
+    }
+
     row.appendChild(prefix);
     row.appendChild(meta);
+    row.appendChild(actions);
     if (i === queueIndex) {
       row.style.opacity = "1";
       row.style.fontWeight = "700";
@@ -462,6 +643,7 @@ function renderQueue() {
     }
     elQueueList.appendChild(row);
   });
+  scheduleSessionSave();
 }
 
 function setHint(text) {
@@ -482,6 +664,52 @@ function setHint(text) {
     elComposerHint.textContent = "";
     hintTimer = null;
   }, 2600);
+}
+
+async function startNewSession() {
+  try {
+    userPaused = false;
+    interrupted = false;
+    seeking = false;
+    segueSpokenInQueue = 0;
+    resetLyricSegment();
+  } catch {}
+
+  try {
+    activeAudio.pause();
+  } catch {}
+  try {
+    activeAudio.currentTime = 0;
+  } catch {}
+  try {
+    activeAudio.removeAttribute("src");
+    activeAudio.load();
+  } catch {}
+
+  if ("speechSynthesis" in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {}
+  }
+
+  try {
+    if (typeof window.removeStartPlayCard === "function") window.removeStartPlayCard();
+  } catch {}
+
+  queue = [];
+  queueIndex = -1;
+  preloadIndex = -1;
+  preloadStatus = "idle";
+  renderQueue();
+  elTrackTitle.textContent = "未播放";
+  updateTimeUI(0, 0);
+  updateProgressUI(0, 0);
+  setPlayingUI(false);
+  setHint("");
+
+  if (elChat) elChat.innerHTML = "";
+  sessionMessages = [];
+  await clearSavedSession();
 }
 
 function setSoulStatus(text) {
@@ -823,15 +1051,46 @@ function setHistoryStatus(text) {
 }
 
 function setHistoryView(nextView) {
-  historyView = "list";
-  if (elHistoryBack) elHistoryBack.hidden = true;
+  const v = nextView === "detail" ? "detail" : "list";
+  historyView = v;
+  if (elHistoryBack) elHistoryBack.hidden = v !== "detail";
   if (elHistoryImport) {
-    elHistoryImport.hidden = false;
-    elHistoryImport.removeAttribute("hidden");
+    const hideImport = v === "detail";
+    elHistoryImport.hidden = hideImport;
+    if (!hideImport) elHistoryImport.removeAttribute("hidden");
   }
-  if (elHistoryList) elHistoryList.hidden = false;
-  if (elHistoryDetail) elHistoryDetail.hidden = true;
-  if (elHistoryTitle) elHistoryTitle.textContent = "历史";
+  if (elHistoryList) elHistoryList.hidden = v !== "list";
+  if (elHistoryDetail) elHistoryDetail.hidden = v !== "detail";
+  if (elHistoryTitle) elHistoryTitle.textContent = v === "detail" ? "详情" : "历史";
+}
+
+async function hydrateHistoryCoverFromCache(track, cover, coverBox, renderToken) {
+  const key = getVoteKeyForTrack(track);
+  if (!key) return;
+  if (renderToken !== historyCoverRenderToken) return;
+
+  const existing = historyCoverByKey[key];
+  if (existing === null) return;
+  if (typeof existing === "string" && existing) {
+    cover.src = existing;
+    return;
+  }
+
+  const name = track?.name ? String(track.name).trim() : "";
+  const artist = track?.artist ? String(track.artist).trim() : "";
+  if (!name || !artist) return;
+
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "getCachedTrack", track: { name, artist } });
+    if (renderToken !== historyCoverRenderToken) return;
+    const coverUrl = resp?.ok && resp?.hit && resp?.resolved?.cover ? String(resp.resolved.cover) : "";
+    if (!coverUrl) {
+      historyCoverByKey[key] = null;
+      return;
+    }
+    historyCoverByKey[key] = coverUrl;
+    cover.src = coverUrl;
+  } catch {}
 }
 
 function renderHistoryList() {
@@ -847,6 +1106,7 @@ function renderHistoryList() {
     return;
   }
 
+  const renderToken = ++historyCoverRenderToken;
   let globalIndex = 0;
   historySections.forEach((section) => {
     const stamp = section?.stamp ? String(section.stamp) : "";
@@ -871,6 +1131,7 @@ function renderHistoryList() {
       globalIndex += 1;
       const row = document.createElement("div");
       row.className = "queueItem";
+      row.style.cursor = "pointer";
 
       const prefix = document.createElement("div");
       prefix.className = "queuePrefix";
@@ -879,6 +1140,34 @@ function renderHistoryList() {
       index.className = "queueIndex";
       index.textContent = String(globalIndex);
       prefix.appendChild(index);
+
+      const coverBox = document.createElement("div");
+      coverBox.className = "queueCoverBox fallback";
+
+      const cover = document.createElement("img");
+      cover.className = "queueCover";
+      cover.alt = "";
+      cover.decoding = "async";
+      cover.loading = "lazy";
+      const coverUrl = t?.cover ? String(t.cover).trim() : "";
+      if (coverUrl) {
+        cover.src = coverUrl;
+        coverBox.classList.remove("fallback");
+      } else {
+        cover.hidden = true;
+      }
+      cover.addEventListener("load", () => {
+        cover.hidden = false;
+        coverBox.classList.remove("fallback");
+      });
+      cover.addEventListener("error", () => {
+        cover.hidden = true;
+        cover.removeAttribute("src");
+        coverBox.classList.add("fallback");
+      });
+      coverBox.appendChild(cover);
+
+      prefix.appendChild(coverBox);
 
       const meta = document.createElement("div");
       meta.className = "queueText";
@@ -892,15 +1181,109 @@ function renderHistoryList() {
       meta.appendChild(name);
       meta.appendChild(artist);
 
+      const actions = document.createElement("div");
+      actions.className = "queueActions";
+      const key = getVoteKeyForTrack(t);
+      const vote = key ? Number(trackVotes[key] ?? 0) : 0;
+      if (key) {
+        const detailBtn = document.createElement("button");
+        detailBtn.className = "queueVoteBtn";
+        detailBtn.type = "button";
+        detailBtn.setAttribute("aria-label", "详情");
+        detailBtn.innerHTML = `<svg class="btnIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 18l6-6-6-6"/></svg>`;
+        detailBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void openHistoryDetail(t, stamp);
+        });
+        actions.appendChild(detailBtn);
+      }
+      if (key) {
+        const likeBtn = document.createElement("button");
+        likeBtn.className = `queueVoteBtn${vote === 1 ? " active" : ""}`;
+        likeBtn.type = "button";
+        likeBtn.setAttribute("aria-label", "点赞");
+        likeBtn.dataset.kind = "up";
+        likeBtn.innerHTML = renderVoteIcon("up", vote === 1);
+        likeBtn.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const next = vote === 1 ? 0 : 1;
+          if (next === 0) delete trackVotes[key];
+          else trackVotes[key] = 1;
+          await saveTrackVotes();
+          renderHistoryList();
+          renderQueue();
+        });
+
+        const dislikeBtn = document.createElement("button");
+        dislikeBtn.className = `queueVoteBtn${vote === -1 ? " active" : ""}`;
+        dislikeBtn.type = "button";
+        dislikeBtn.setAttribute("aria-label", "踩");
+        dislikeBtn.dataset.kind = "down";
+        dislikeBtn.innerHTML = renderVoteIcon("down", vote === -1);
+        dislikeBtn.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const next = vote === -1 ? 0 : -1;
+          if (next === 0) delete trackVotes[key];
+          else trackVotes[key] = -1;
+          await saveTrackVotes();
+          renderHistoryList();
+          renderQueue();
+        });
+
+        actions.appendChild(likeBtn);
+        actions.appendChild(dislikeBtn);
+      }
+
       row.appendChild(prefix);
       row.appendChild(meta);
+      row.appendChild(actions);
       elHistoryList.appendChild(row);
+      if (key) void hydrateHistoryCoverFromCache(t, cover, coverBox, renderToken);
+
+      row.addEventListener("click", async () => {
+        const trackName = t?.name ? String(t.name).trim() : "";
+        const trackArtist = t?.artist ? String(t.artist).trim() : "";
+        if (!trackName || !trackArtist) return;
+        const item = { name: trackName, artist: trackArtist, provider: "cached" };
+        const insertAt = queueIndex >= 0 ? Math.min(queueIndex + 1, queue.length) : queue.length;
+        queue.splice(insertAt, 0, item);
+        renderQueue();
+        try {
+          await playAt(insertAt);
+        } catch {}
+      });
     });
   });
 }
 
-function openHistoryDetail(index) {
-  return;
+async function openHistoryDetail(track, stamp) {
+  const name = track?.name ? String(track.name).trim() : "";
+  const artist = track?.artist ? String(track.artist).trim() : "";
+  const raw = track?.raw ? String(track.raw) : "";
+  if (!name || !artist) return;
+
+  historySelectedIndex = -1;
+  setHistoryView("detail");
+  if (elHistoryTitle) elHistoryTitle.textContent = stamp ? String(stamp) : "详情";
+  if (elHistoryDetailName) elHistoryDetailName.textContent = name;
+  if (elHistoryDetailArtist) elHistoryDetailArtist.textContent = artist;
+  if (elHistoryDetailRaw) elHistoryDetailRaw.textContent = raw;
+
+  if (elHistoryDetailCover) {
+    elHistoryDetailCover.hidden = true;
+    elHistoryDetailCover.removeAttribute("src");
+  }
+  if (elHistoryDetailCoverBox) elHistoryDetailCoverBox.classList.add("fallback");
+
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "getCachedTrack", track: { name, artist } });
+    const cover = resp?.ok && resp?.hit && resp?.resolved?.cover ? String(resp.resolved.cover) : "";
+    if (!cover || !elHistoryDetailCover) return;
+    elHistoryDetailCover.src = cover;
+  } catch {}
 }
 
 function openHistoryPanel() {
@@ -1297,14 +1680,12 @@ async function handleAssistantResult(result) {
     return;
   }
 
-  const hasTracks = Array.isArray(result.play) && result.play.length > 0;
   const parts = [];
-  const say = result.say != null ? String(result.say).trim() : "";
-  const reason = result.reason != null ? String(result.reason).trim() : "";
-  if (say) parts.push(say);
-  if (reason) parts.push(reason);
+  if (result.say) parts.push(result.say);
+  if (result.reason) parts.push(result.reason);
   if (parts.length) appendMessage("assistant", parts.join("\n\n"));
-  else if (!hasTracks) appendMessage("assistant", "未收到有效回复");
+
+  const hasTracks = Array.isArray(result.play) && result.play.length > 0;
   const shouldPrefixSegue = hasTracks && queueIndex === -1 && queue.length === 0 && result.segue;
   if (!shouldPrefixSegue && result.segue && shouldSpeakSegue()) {
     segueSpokenInQueue += 1;
@@ -1432,6 +1813,14 @@ elSend.addEventListener("click", async () => {
   }
 });
 
+if (elBtnClear) {
+  elBtnClear.addEventListener("click", async () => {
+    await startNewSession();
+    updateSendState();
+    setHint("已开启新会话");
+  });
+}
+
 elInput.addEventListener("keydown", async (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
@@ -1465,6 +1854,15 @@ elAvatarFile.addEventListener("change", async () => {
 
 elBtnQueue.addEventListener("click", () => {
   elQueue.hidden = !elQueue.hidden;
+});
+
+window.addEventListener("click", (e) => {
+  if (!elQueue || elQueue.hidden) return;
+  const t = e?.target;
+  if (!t) return;
+  if (elQueue.contains(t)) return;
+  if (elBtnQueue && elBtnQueue.contains(t)) return;
+  elQueue.hidden = true;
 });
 
 elBtnPlay.addEventListener("click", async () => {
@@ -1769,6 +2167,18 @@ if (elHistoryBack) {
   elHistoryBack.addEventListener("click", () => setHistoryView("list"));
 }
 
+if (elHistoryDetailCover && elHistoryDetailCoverBox) {
+  elHistoryDetailCover.addEventListener("load", () => {
+    elHistoryDetailCover.hidden = false;
+    elHistoryDetailCoverBox.classList.remove("fallback");
+  });
+  elHistoryDetailCover.addEventListener("error", () => {
+    elHistoryDetailCover.hidden = true;
+    elHistoryDetailCover.removeAttribute("src");
+    elHistoryDetailCoverBox.classList.add("fallback");
+  });
+}
+
 if (elHistoryImport && elHistoryImportFile) {
   elHistoryImport.addEventListener("click", () => {
     elHistoryImportFile.value = "";
@@ -1817,6 +2227,23 @@ if (elTtsVoiceSelect) {
       setHint(`保存失败：${message}`);
     }
     await refreshTtsSettingsUI();
+  });
+}
+
+if (elSettingsKeepSession) {
+  elSettingsKeepSession.addEventListener("change", async () => {
+    const enabled = Boolean(elSettingsKeepSession.checked);
+    keepSessionOnClose = enabled;
+    try {
+      await patchPreferences({ keepSessionOnClose: enabled });
+    } catch {}
+    if (!enabled) {
+      await clearSavedSession();
+      setHint("已关闭保留会话");
+    } else {
+      scheduleSessionSave();
+      setHint("已开启保留会话");
+    }
   });
 }
 
@@ -1884,9 +2311,17 @@ safePost({ type: "ready" });
 
 (async () => {
   const prefs = await getPreferences();
+  await loadTrackVotes();
   setDjNameUI(prefs.djName || "Claudio");
   setAvatarUI(prefs.avatarDataUrl || "");
   ttsVoiceId = String(prefs.ttsVoiceId || "").trim();
+  keepSessionOnClose = prefs.keepSessionOnClose !== false;
+  if (elSettingsKeepSession) elSettingsKeepSession.checked = keepSessionOnClose;
+  if (keepSessionOnClose) {
+    await restoreSessionIfAny();
+  } else {
+    await clearSavedSession();
+  }
   if ("speechSynthesis" in window) {
     refreshVoiceCache();
     try {
@@ -1896,4 +2331,13 @@ safePost({ type: "ready" });
       };
     } catch {}
   }
+
+  window.addEventListener("pagehide", () => {
+    if (keepSessionOnClose) void saveSessionNow();
+    else void clearSavedSession();
+  });
+  window.addEventListener("beforeunload", () => {
+    if (keepSessionOnClose) void saveSessionNow();
+    else void clearSavedSession();
+  });
 })();

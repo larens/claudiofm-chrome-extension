@@ -10,6 +10,7 @@ import urllib.request
 import urllib.parse
 import shutil
 import base64
+import hashlib
 
 def resolve_template_path(input_path):
     provided = str(input_path or "")
@@ -594,6 +595,189 @@ def get_claudiofm_folder():
     home = os.path.expanduser("~")
     return os.path.join(home, "Documents", "Claudiofm")
 
+def get_cache_folder():
+    return os.path.join(get_claudiofm_folder(), "cache")
+
+def ensure_cache_folders():
+    base = get_cache_folder()
+    tracks_dir = os.path.join(base, "tracks")
+    covers_dir = os.path.join(base, "covers")
+    os.makedirs(tracks_dir, exist_ok=True)
+    os.makedirs(covers_dir, exist_ok=True)
+    return {"base": base, "tracks": tracks_dir, "covers": covers_dir}
+
+def sha1_hex(text):
+    return hashlib.sha1(str(text or "").encode("utf-8")).hexdigest()
+
+def safe_json_load(path):
+    try:
+        if not os.path.isfile(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def safe_json_write(path, obj):
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+def guess_cover_ext(content_type, url):
+    ct = str(content_type or "").lower()
+    if "png" in ct:
+        return ".png"
+    if "webp" in ct:
+        return ".webp"
+    if "gif" in ct:
+        return ".gif"
+    if "jpeg" in ct or "jpg" in ct:
+        return ".jpg"
+    u = str(url or "").lower()
+    for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif"]:
+        if u.endswith(ext):
+            return ".jpg" if ext == ".jpeg" else ext
+    return ".jpg"
+
+def download_cover_to_path(url, out_path, timeout=8):
+    u = str(url or "").strip()
+    if not u or not (u.startswith("http://") or u.startswith("https://")):
+        return {"ok": False, "error": "invalid cover url"}
+    try:
+        req = urllib.request.Request(u, headers={"user-agent": "ClaudiofmHost/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            ct = resp.headers.get("content-type", "")
+            data = resp.read()
+        if not data:
+            return {"ok": False, "error": "empty cover data"}
+        if len(data) > 900 * 1024:
+            return {"ok": False, "error": "cover too large"}
+        ext = guess_cover_ext(ct, u)
+        final_path = out_path if out_path.endswith(ext) else (os.path.splitext(out_path)[0] + ext)
+        with open(final_path, "wb") as f:
+            f.write(data)
+        return {"ok": True, "path": final_path, "contentType": ct}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def file_to_data_url(path, content_type_hint=""):
+    try:
+        if not os.path.isfile(path):
+            return ""
+        size = os.path.getsize(path)
+        if size <= 0 or size > 700 * 1024:
+            return ""
+        with open(path, "rb") as f:
+            data = f.read()
+        b64 = base64.b64encode(data).decode("ascii")
+        ct = str(content_type_hint or "").strip().lower()
+        if not ct:
+            p = str(path).lower()
+            if p.endswith(".png"):
+                ct = "image/png"
+            elif p.endswith(".webp"):
+                ct = "image/webp"
+            elif p.endswith(".gif"):
+                ct = "image/gif"
+            else:
+                ct = "image/jpeg"
+        return f"data:{ct};base64,{b64}"
+    except Exception:
+        return ""
+
+def cache_track_entry(track, resolved):
+    name = str(track.get("name", "") if isinstance(track, dict) else "").strip()
+    artist = str(track.get("artist", "") if isinstance(track, dict) else "").strip()
+    if not name or not artist:
+        return {"ok": False, "error": "missing name/artist"}
+    stream_url = str(resolved.get("streamUrl", "") if isinstance(resolved, dict) else "").strip()
+    cover = str(resolved.get("cover", "") if isinstance(resolved, dict) else "").strip()
+    duration_ms = resolved.get("durationMs", 0) if isinstance(resolved, dict) else 0
+    provider = str(resolved.get("provider", "") if isinstance(resolved, dict) else "").strip()
+    if not stream_url:
+        return {"ok": False, "error": "missing streamUrl"}
+
+    folders = ensure_cache_folders()
+    key = normalize_track_key(name, artist)
+    hid = sha1_hex(key)
+    index_path = os.path.join(folders["base"], "index.json")
+    meta_path = os.path.join(folders["tracks"], f"{hid}.json")
+
+    index = safe_json_load(index_path)
+    if not isinstance(index, dict):
+        index = {}
+
+    entry = {
+        "name": name,
+        "artist": artist,
+        "key": key,
+        "id": hid,
+        "provider": provider or "cached",
+        "streamUrl": stream_url,
+        "cover": cover,
+        "durationMs": int(duration_ms) if isinstance(duration_ms, (int, float)) else 0,
+        "updatedAt": datetime.datetime.now().isoformat(timespec="seconds"),
+        "coverPath": "",
+        "coverContentType": "",
+    }
+
+    existing = safe_json_load(meta_path)
+    if isinstance(existing, dict):
+        for k in ["coverPath", "coverContentType"]:
+            if existing.get(k):
+                entry[k] = existing.get(k)
+
+    if cover and not entry.get("coverPath"):
+        cover_out = os.path.join(folders["covers"], f"{hid}.img")
+        dl = download_cover_to_path(cover, cover_out, timeout=6)
+        if dl.get("ok"):
+            entry["coverPath"] = dl.get("path", "")
+            entry["coverContentType"] = dl.get("contentType", "")
+
+    safe_json_write(meta_path, entry)
+    index[key] = {
+        "id": hid,
+        "metaPath": meta_path,
+        "updatedAt": entry["updatedAt"],
+    }
+    safe_json_write(index_path, index)
+    return {"ok": True, "key": key, "id": hid, "metaPath": meta_path, "coverPath": entry.get("coverPath", "")}
+
+def get_cached_track_entry(track):
+    name = str(track.get("name", "") if isinstance(track, dict) else "").strip()
+    artist = str(track.get("artist", "") if isinstance(track, dict) else "").strip()
+    if not name or not artist:
+        return {"ok": True, "hit": False}
+    key = normalize_track_key(name, artist)
+    folders = ensure_cache_folders()
+    index_path = os.path.join(folders["base"], "index.json")
+    index = safe_json_load(index_path)
+    if not isinstance(index, dict):
+        return {"ok": True, "hit": False}
+    ref = index.get(key)
+    if not isinstance(ref, dict):
+        return {"ok": True, "hit": False}
+    meta_path = ref.get("metaPath", "")
+    meta = safe_json_load(meta_path)
+    if not isinstance(meta, dict):
+        return {"ok": True, "hit": False}
+    cover_data_url = ""
+    cover_path = str(meta.get("coverPath", "") or "")
+    if cover_path:
+        cover_data_url = file_to_data_url(cover_path, str(meta.get("coverContentType", "") or ""))
+    resolved = {
+        "provider": meta.get("provider", "cached"),
+        "track": {"name": meta.get("name", ""), "artist": meta.get("artist", "")},
+        "streamUrl": meta.get("streamUrl", ""),
+        "cover": cover_data_url or meta.get("cover", ""),
+        "durationMs": meta.get("durationMs", 0),
+        "cacheHit": True,
+    }
+    return {"ok": True, "hit": True, "resolved": resolved}
+
 def ensure_list_file():
     folder = get_claudiofm_folder()
     file_path = os.path.join(folder, "list.md")
@@ -863,6 +1047,27 @@ def build_prompt(input_data):
     except Exception:
         mem_md = ""
 
+    liked = []
+    disliked = []
+    try:
+        liked = input_data.get("likedTracks", []) if isinstance(input_data.get("likedTracks", []), list) else []
+        disliked = input_data.get("dislikedTracks", []) if isinstance(input_data.get("dislikedTracks", []), list) else []
+    except Exception:
+        liked = []
+        disliked = []
+
+    def fmt_track_lines(items, limit=20):
+        out = []
+        for t in items[:limit]:
+            if not isinstance(t, dict):
+                continue
+            name = str(t.get("name", "") or "").strip()
+            artist = str(t.get("artist", "") or "").strip()
+            if not name or not artist:
+                continue
+            out.append(f"- {name} - {artist}")
+        return "\n".join(out)
+
     instructions = [
         f"你是 Claudiofm 的 DJ {dj}。回复必须是中文。",
         "你的任务：根据用户消息、画像摘要、场景信息，给出电台式回应。",
@@ -871,6 +1076,8 @@ def build_prompt(input_data):
         "无论 forceRecommend 是否为 true，say 都必须对用户消息做出明确回应，禁止输出空字符串或只包含空白。",
         "当 forceRecommend=true 时，必须推荐 5-10 首歌（play 长度 5-10，segue 需要可口播）。",
         "当 forceRecommend=false 时：只有在用户明确在聊音乐/想听歌/要推荐/要歌单时才推荐 5-10 首歌；否则 play 输出空数组，segue 输出空字符串。",
+        "强约束：dislikedTracks（踩过）里的歌曲，以及这些歌曲的同艺人/强相似风格，后续不要再推荐。",
+        "偏好：likedTracks（赞过）里的歌曲及其同风格/同艺人可提高推荐权重（更容易出现）。",
         "每首歌只输出 name/artist；album/query/provider 可选。",
         "memory 用于写回画像偏好，尽量输出 1-3 条可执行的偏好更新。",
     ]
@@ -882,6 +1089,12 @@ def build_prompt(input_data):
         "",
         "【forceRecommend】",
         "true" if force_recommend else "false",
+        "",
+        "【likedTracks（赞）】",
+        fmt_track_lines(liked) or "(空)",
+        "",
+        "【dislikedTracks（踩）】",
+        fmt_track_lines(disliked) or "(空)",
         "",
         "【历史播放歌单（list.md 摘要）】",
         str(list_md or "").strip() or "(空)",
@@ -1211,6 +1424,23 @@ def main():
         if not msg:
             break
         mtype = msg.get("type")
+        if mtype == "cacheTrack":
+            try:
+                track = msg.get("track", {}) if isinstance(msg, dict) else {}
+                resolved = msg.get("resolved", {}) if isinstance(msg, dict) else {}
+                resp = cache_track_entry(track, resolved)
+                send_message(resp)
+            except Exception as e:
+                send_message({"ok": False, "error": str(e)})
+            continue
+        if mtype == "getCachedTrack":
+            try:
+                track = msg.get("track", {}) if isinstance(msg, dict) else {}
+                resp = get_cached_track_entry(track)
+                send_message(resp)
+            except Exception as e:
+                send_message({"ok": False, "error": str(e)})
+            continue
         if mtype == "tts":
             try:
                 text = str(msg.get("text", "") or "").strip()

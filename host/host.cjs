@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const { spawn, spawnSync } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -176,9 +177,23 @@ function buildPrompt(input) {
   const scene = input.scene || "";
   const force = Boolean(input.forceProfileRefresh);
   const forceRecommend = Boolean(input.forceRecommend);
+  const likedTracks = Array.isArray(input.likedTracks) ? input.likedTracks : [];
+  const dislikedTracks = Array.isArray(input.dislikedTracks) ? input.dislikedTracks : [];
   const listFile = readListFile();
   const listMd = listFile && listFile.ok ? String(listFile.content || "") : "";
   const memMd = readMusicMemoryFile();
+
+  const fmtTracks = (items, limit = 20) =>
+    items
+      .slice(0, limit)
+      .map((t) => {
+        const name = t && t.name ? String(t.name).trim() : "";
+        const artist = t && t.artist ? String(t.artist).trim() : "";
+        if (!name || !artist) return "";
+        return `- ${name} - ${artist}`;
+      })
+      .filter(Boolean)
+      .join("\n");
 
   const instructions = [
     `你是 Claudiofm 的 DJ ${dj}。回复必须是中文。`,
@@ -188,6 +203,8 @@ function buildPrompt(input) {
     "无论 forceRecommend 是否为 true，say 都必须对用户消息做出明确回应，禁止输出空字符串或只包含空白。",
     "当 forceRecommend=true 时，必须推荐 5-10 首歌（play 长度 5-10，segue 需要可口播）。",
     "当 forceRecommend=false 时：只有在用户明确在聊音乐/想听歌/要推荐/要歌单时才推荐 5-10 首歌；否则 play 输出空数组，segue 输出空字符串。",
+    "强约束：dislikedTracks（踩过）里的歌曲，以及这些歌曲的同艺人/强相似风格，后续不要再推荐。",
+    "偏好：likedTracks（赞过）里的歌曲及其同风格/同艺人可提高推荐权重（更容易出现）。",
     "每首歌只输出 name/artist；album/query/provider 可选。",
     "memory 用于写回画像偏好，尽量输出 1-3 条可执行的偏好更新。",
     force ? "这是一次画像自检更新，请务必输出 2-3 条高质量 memory 用于纠偏与巩固偏好。" : ""
@@ -198,6 +215,12 @@ function buildPrompt(input) {
     "",
     "【forceRecommend】",
     forceRecommend ? "true" : "false",
+    "",
+    "【likedTracks（赞）】",
+    fmtTracks(likedTracks) || "(空)",
+    "",
+    "【dislikedTracks（踩）】",
+    fmtTracks(dislikedTracks) || "(空)",
     "",
     "【历史播放歌单（list.md 摘要）】",
     listMd.trim() || "(空)",
@@ -445,6 +468,189 @@ function runClaudeWithOptionalModel(prompt, schema, model) {
       resolve({ ok: true, result: structured });
     });
   });
+}
+
+function getClaudiofmFolder() {
+  return path.join(os.homedir(), "Documents", "Claudiofm");
+}
+
+function getCacheFolder() {
+  return path.join(getClaudiofmFolder(), "cache");
+}
+
+function ensureCacheFolders() {
+  const base = getCacheFolder();
+  const tracks = path.join(base, "tracks");
+  const covers = path.join(base, "covers");
+  fs.mkdirSync(tracks, { recursive: true });
+  fs.mkdirSync(covers, { recursive: true });
+  return { base, tracks, covers };
+}
+
+function sha1Hex(text) {
+  return crypto.createHash("sha1").update(String(text || ""), "utf8").digest("hex");
+}
+
+function safeJsonLoad(p) {
+  try {
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function safeJsonWrite(p, obj) {
+  const folder = path.dirname(p);
+  fs.mkdirSync(folder, { recursive: true });
+  const tmp = `${p}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), "utf8");
+  fs.renameSync(tmp, p);
+}
+
+function normalizeTrackKey(name, artist) {
+  const strip = (v) =>
+    String(v || "")
+      .toLowerCase()
+      .trim()
+      .replace(/[\s\-_–—·•、，,。.!！?？'"“”‘’()（）【】[\]{}<>《》:：;；/\\|]+/g, "");
+  return `${strip(name)}|${strip(artist)}`;
+}
+
+function guessCoverExt(contentType, url) {
+  const ct = String(contentType || "").toLowerCase();
+  if (ct.includes("png")) return ".png";
+  if (ct.includes("webp")) return ".webp";
+  if (ct.includes("gif")) return ".gif";
+  if (ct.includes("jpeg") || ct.includes("jpg")) return ".jpg";
+  const u = String(url || "").toLowerCase();
+  for (const ext of [".jpg", ".jpeg", ".png", ".webp", ".gif"]) {
+    if (u.endsWith(ext)) return ext === ".jpeg" ? ".jpg" : ext;
+  }
+  return ".jpg";
+}
+
+async function downloadCoverToPath(url, outPath, timeoutMs = 8000) {
+  const u = String(url || "").trim();
+  if (!u || !(u.startsWith("http://") || u.startsWith("https://"))) return { ok: false, error: "invalid cover url" };
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    const resp = await fetch(u, { headers: { "user-agent": "ClaudiofmHost/1.0" }, signal: controller.signal });
+    clearTimeout(t);
+    if (!resp.ok) return { ok: false, error: `http ${resp.status}` };
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (!buf.length) return { ok: false, error: "empty cover data" };
+    if (buf.length > 900 * 1024) return { ok: false, error: "cover too large" };
+    const ct = resp.headers.get("content-type") || "";
+    const ext = guessCoverExt(ct, u);
+    const finalPath = outPath.endsWith(ext) ? outPath : `${path.parse(outPath).name}${ext}`;
+    const finalAbs = path.isAbsolute(finalPath) ? finalPath : path.join(path.dirname(outPath), finalPath);
+    fs.writeFileSync(finalAbs, buf);
+    return { ok: true, path: finalAbs, contentType: ct };
+  } catch (e) {
+    const message = e && e.message ? String(e.message) : String(e);
+    return { ok: false, error: message };
+  }
+}
+
+function fileToDataUrl(p, contentTypeHint = "") {
+  try {
+    if (!fs.existsSync(p)) return "";
+    const stat = fs.statSync(p);
+    if (!stat.isFile()) return "";
+    if (stat.size <= 0 || stat.size > 700 * 1024) return "";
+    const buf = fs.readFileSync(p);
+    const b64 = buf.toString("base64");
+    let ct = String(contentTypeHint || "").trim().toLowerCase();
+    if (!ct) {
+      const lower = String(p).toLowerCase();
+      if (lower.endsWith(".png")) ct = "image/png";
+      else if (lower.endsWith(".webp")) ct = "image/webp";
+      else if (lower.endsWith(".gif")) ct = "image/gif";
+      else ct = "image/jpeg";
+    }
+    return `data:${ct};base64,${b64}`;
+  } catch {
+    return "";
+  }
+}
+
+async function cacheTrackEntry(track, resolved) {
+  const name = track && track.name ? String(track.name).trim() : "";
+  const artist = track && track.artist ? String(track.artist).trim() : "";
+  if (!name || !artist) return { ok: false, error: "missing name/artist" };
+  const streamUrl = resolved && resolved.streamUrl ? String(resolved.streamUrl).trim() : "";
+  if (!streamUrl) return { ok: false, error: "missing streamUrl" };
+
+  const cover = resolved && resolved.cover ? String(resolved.cover).trim() : "";
+  const durationMs = resolved && resolved.durationMs ? Number(resolved.durationMs) : 0;
+  const provider = resolved && resolved.provider ? String(resolved.provider).trim() : "cached";
+  const folders = ensureCacheFolders();
+  const key = normalizeTrackKey(name, artist);
+  const id = sha1Hex(key);
+  const indexPath = path.join(folders.base, "index.json");
+  const metaPath = path.join(folders.tracks, `${id}.json`);
+
+  const index = safeJsonLoad(indexPath);
+  const nextIndex = index && typeof index === "object" ? index : {};
+  const existing = safeJsonLoad(metaPath);
+
+  const entry = {
+    name,
+    artist,
+    key,
+    id,
+    provider,
+    streamUrl,
+    cover,
+    durationMs: Number.isFinite(durationMs) ? Math.floor(durationMs) : 0,
+    updatedAt: new Date().toISOString().slice(0, 19),
+    coverPath: existing && existing.coverPath ? String(existing.coverPath) : "",
+    coverContentType: existing && existing.coverContentType ? String(existing.coverContentType) : "",
+  };
+
+  if (cover && !entry.coverPath) {
+    const coverOut = path.join(folders.covers, `${id}.img`);
+    const dl = await downloadCoverToPath(cover, coverOut, 6000);
+    if (dl.ok) {
+      entry.coverPath = dl.path || "";
+      entry.coverContentType = dl.contentType || "";
+    }
+  }
+
+  safeJsonWrite(metaPath, entry);
+  nextIndex[key] = { id, metaPath, updatedAt: entry.updatedAt };
+  safeJsonWrite(indexPath, nextIndex);
+  return { ok: true, key, id, metaPath, coverPath: entry.coverPath || "" };
+}
+
+function getCachedTrackEntry(track) {
+  const name = track && track.name ? String(track.name).trim() : "";
+  const artist = track && track.artist ? String(track.artist).trim() : "";
+  if (!name || !artist) return { ok: true, hit: false };
+  const key = normalizeTrackKey(name, artist);
+  const folders = ensureCacheFolders();
+  const indexPath = path.join(folders.base, "index.json");
+  const index = safeJsonLoad(indexPath);
+  if (!index || typeof index !== "object") return { ok: true, hit: false };
+  const ref = index[key];
+  if (!ref || typeof ref !== "object") return { ok: true, hit: false };
+  const meta = safeJsonLoad(ref.metaPath || "");
+  if (!meta || typeof meta !== "object") return { ok: true, hit: false };
+  const coverDataUrl = meta.coverPath ? fileToDataUrl(String(meta.coverPath), String(meta.coverContentType || "")) : "";
+  return {
+    ok: true,
+    hit: true,
+    resolved: {
+      provider: meta.provider || "cached",
+      track: { name: meta.name || "", artist: meta.artist || "" },
+      streamUrl: meta.streamUrl || "",
+      cover: coverDataUrl || meta.cover || "",
+      durationMs: meta.durationMs || 0,
+      cacheHit: true,
+    },
+  };
 }
 
 async function fetchJson(url, options) {
@@ -1053,6 +1259,19 @@ function optimizeMemoryFile(input) {
 readNativeMessageStream(async (msg) => {
   try {
     if (!msg || typeof msg !== "object") return;
+    if (msg.type === "cacheTrack") {
+      const track = msg.track && typeof msg.track === "object" ? msg.track : {};
+      const resolved = msg.resolved && typeof msg.resolved === "object" ? msg.resolved : {};
+      const res = await cacheTrackEntry(track, resolved);
+      sendNativeMessage(res);
+      return;
+    }
+    if (msg.type === "getCachedTrack") {
+      const track = msg.track && typeof msg.track === "object" ? msg.track : {};
+      const res = getCachedTrackEntry(track);
+      sendNativeMessage(res);
+      return;
+    }
     if (msg.type === "exportMemoryMd") {
       sendNativeMessage(exportMemoryMd(msg));
       return;

@@ -149,6 +149,57 @@ body {
   gap: 8px;
 }
 
+.settingsSwitch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  user-select: none;
+}
+
+.settingsSwitch input {
+  position: absolute;
+  inset: 0;
+  width: 44px;
+  height: 24px;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.settingsSwitchTrack {
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--borderSoft);
+  background: var(--panel);
+  position: relative;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.settingsSwitchTrack::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--borderSoft);
+  transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+.settingsSwitch input:checked + .settingsSwitchTrack {
+  background: rgba(122, 92, 255, 0.28);
+  border-color: rgba(122, 92, 255, 0.35);
+}
+
+.settingsSwitch input:checked + .settingsSwitchTrack::after {
+  transform: translateX(20px);
+  background: color-mix(in srgb, CanvasText 10%, Canvas 90%);
+  border-color: rgba(122, 92, 255, 0.35);
+}
+
 .settingsLabel {
   font-size: 12px;
   color: var(--muted);
@@ -288,6 +339,24 @@ body {
   flex-direction: column;
   gap: 8px;
   min-height: 0;
+}
+
+.historyDetailHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.historyDetailMeta {
+  min-width: 0;
+  flex: 1;
+}
+
+.historyDetail .queueCoverBox {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
 }
 
 .historyDetailName {
@@ -561,8 +630,8 @@ button:hover {
 }
 
 .queueCoverBox {
-  width: 18px;
-  height: 18px;
+  width: 32px;
+  height: 32px;
   border-radius: 4px;
   overflow: hidden;
   flex: 0 0 auto;
@@ -586,6 +655,48 @@ button:hover {
   gap: 1px;
   min-width: 0;
   flex: 1;
+}
+
+.queueActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.queueVoteBtn {
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--borderSoft);
+  background: transparent;
+  color: var(--muted);
+  --icon-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.queueVoteBtn:hover {
+  background: var(--surfaceHover);
+}
+
+.queueVoteBtn .btnIcon {
+  pointer-events: none;
+}
+
+.queueVoteBtn.active[data-kind="up"] {
+  color: rgba(122, 92, 255, 0.95);
+  border-color: rgba(122, 92, 255, 0.35);
+}
+
+.queueVoteBtn.active[data-kind="down"] {
+  color: rgba(255, 59, 48, 0.95);
+  border-color: rgba(255, 59, 48, 0.35);
 }
 
 .player {
