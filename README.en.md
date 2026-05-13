@@ -15,12 +15,14 @@ Claudefm is a Chromium Side Panel extension that turns chat, playlist recommenda
 
 ## Features
 
+- **Top player bar**: playback controls (prev / play / next / progress) integrated into the header; queue button expands the current playlist drawer downward
+- **Wave animation**: a flowing sound-wave visualizer displayed above the player, animating in real time
 - Instant chat feedback with semantic confirmation before recommending playlists
-- DJ segue editing, push, and playback (configurable autoplay or manual confirmation)
+- Read-only recommendation card ("新歌单推荐") with push-to-play (configurable autoplay or manual confirmation)
 - Like/Dislike loop that affects future recommendations
 - History playback list with detail view
 - Local track and cover cache
-- TTS voice selection and lyric interlude generation
+- **TTS synthesis**: supports MiMo TTS with Claude TTS model fallback; DJ segue audio is pre-generated before queue push and served via a local HTTP server for fast playback
 - Soul panel backed by a local music memory file
 - Local AI tool auto-detection and invocation (Claude Code, etc.)
 - Background playback: music continues playing after Side Panel is closed
@@ -29,20 +31,20 @@ Claudefm is a Chromium Side Panel extension that turns chat, playlist recommenda
 
 ```text
 ┌──────────────┐      Native Messaging      ┌─────────────────────────────┐
-│ Side Panel UI│  ───────────────────────▶ │ Claudefm Host              │
-│ extension/   │                           │ host.py / host.cjs          │
-└──────┬───────┘                           └───────────┬─────────────────┘
-       │                                              │
-       │ chrome.runtime.sendMessage / port            │ claude --bare
-       │                                              │ + local files/cache
-┌──────▼────────────────────┐                          │
-│ Background Service Worker │                          │
-│ extension/background.js   │                          │
-└──────────┬─────────────────┘                          │
-           │                                            │
-           │ Provider Tab / Fetch                        │
-           ▼                                            ▼
-      https://music.pjmp3.com/*                  Claudefm data dir
+│ Side Panel UI│  ────────────────────────▶ │ Claudefm Host              │
+│ extension/   │                            │ host.cjs / host.py         │
+└──────┬───────┘                            └───────────┬────────────────┘
+       │                                               │
+       │ chrome.runtime.sendMessage / port             │ claude --bare
+       │                                               │ + local files/cache
+┌──────▼────────────────────┐         ┌────────────────▼────────────────┐
+│ Background Service Worker │         │ TTS Local HTTP Server (lazy)   │
+│ extension/background.js   │         │ 127.0.0.1:<random-port>/tts/   │
+└──────────┬─────────────────┘         └────────────────────────────────┘
+           │
+           │ Provider Tab / Fetch
+           ▼
+      https://music.pjmp3.com/*         Claudefm data dir
 ```
 
 ## Quick Start
@@ -115,7 +117,7 @@ The installer will:
 - create the local data directory
 - create `music.md`
 - create `list.md`
-- create `cache/`, `cache/tracks/`, and `cache/covers/`
+- create `cache/`, `cache/tracks/`, `cache/covers/`, and `cache/tts/`
 
 ### 4. Open The Side Panel
 
@@ -128,10 +130,47 @@ Click the gear icon in the top-right corner of the side panel to open settings:
 | Setting | Description |
 |---------|-------------|
 | DJ Name | Customize the DJ persona name (max 8 chars) |
-| TTS Voice | Select text-to-speech voice |
 | Keep session on close | Preserve chat history when side panel is closed |
 | DJ auto-play | When ON, DJ recommendations play immediately; when OFF, shows confirm buttons before playing |
 | Local AI Tool | Auto-detect or manually select a local AI CLI tool |
+
+## TTS Voice Synthesis Configuration
+
+DJ segue text is converted to speech via TTS (Text-to-Speech). The host retrieves audio in the following priority:
+
+1. **Local cache**: served directly from `cache/tts/` via a local HTTP server (bypasses Native Messaging size limits)
+2. **MiMo TTS API**: calls the Xiaomi MiMo TTS endpoint to generate speech
+3. **Claude TTS model fallback**: uses a locally configured Claude TTS model
+
+### MiMo TTS Setup
+
+Create `tts-config.json` in your local data directory:
+
+```json
+{
+  "provider": "mimo",
+  "api_key": "your-api-key-here",
+  "endpoint": "https://api.xiaomimimo.com/v1/chat/completions",
+  "model": "mimo-v2.5-tts",
+  "voice": "Milo",
+  "style": "Voice style prompt"
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `provider` | Fixed to `mimo` | `mimo` |
+| `api_key` | MiMo API key (required) | — |
+| `endpoint` | API URL | `https://api.xiaomimimo.com/v1/chat/completions` |
+| `model` | Model name | `mimo-v2.5-tts` |
+| `voice` | Voice name | `Milo` |
+| `style` | Voice style prompt | empty |
+
+When `api_key` is empty, MiMo TTS is skipped and the host falls back directly to Claude TTS models.
+
+### Audio Cache
+
+Generated TTS audio is automatically cached in `cache/tts/` with SHA-1 hashed filenames. Identical text will not re-trigger an API request. On startup the host lazily boots a local HTTP server (`127.0.0.1:<random port>`) to serve cached audio to the extension, bypassing Native Messaging message size limits.
 
 ## Default Local Data Directories
 
@@ -143,7 +182,7 @@ Typical contents:
 
 - `music.md`: user music memory profile
 - `list.md`: playlist history
-- `cache/`: cached tracks and covers
+- `cache/`: cached tracks, covers, and TTS audio (`cache/tts/`)
 
 ## Platform Notes
 

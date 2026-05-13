@@ -3,6 +3,6 @@
   "api_key": "",
   "endpoint": "https://api.xiaomimimo.com/v1/chat/completions",
   "model": "mimo-v2.5-tts",
-  "voice": "冰糖",
+  "voice": "白桦",
   "style": "温柔亲切的电台DJ风格，语速适中，带有感染力"
 }
