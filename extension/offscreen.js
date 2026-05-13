@@ -21,8 +21,6 @@ let preloadIndex = -1;
 let preloadStatus = "idle";
 let preloadRequestToken = 0;
 let playRequestToken = 0;
-let ttsVoiceId = "";
-let cachedVoices = [];
 let lastProgressBroadcastAt = 0;
 
 function cloneTrack(track) {
@@ -188,31 +186,6 @@ async function getPlayerPreferences() {
   }
 }
 
-function refreshVoiceCache() {
-  if (!("speechSynthesis" in window)) {
-    cachedVoices = [];
-    return;
-  }
-  const voices = window.speechSynthesis.getVoices();
-  cachedVoices = Array.isArray(voices) ? voices.slice() : [];
-  cachedVoices.sort((a, b) => {
-    const la = String(a?.lang || "");
-    const lb = String(b?.lang || "");
-    if (la !== lb) return la.localeCompare(lb);
-    return String(a?.name || "").localeCompare(String(b?.name || ""));
-  });
-}
-
-function pickVoiceById(voiceId) {
-  const id = String(voiceId || "").trim();
-  if (!id) return null;
-  const byUri = cachedVoices.find((v) => String(v?.voiceURI || "") === id);
-  if (byUri) return byUri;
-  const byName = cachedVoices.find((v) => String(v?.name || "") === id);
-  if (byName) return byName;
-  return null;
-}
-
 async function resolveTrack(track) {
   const cachedStreamUrl = (track?.streamUrl || "").replace(/`/g, "").trim();
   if (cachedStreamUrl) {
@@ -359,27 +332,9 @@ async function playAt(index) {
     speechPaused = false;
     schedulePreloadForNextTrack();
 
-    // 尝试 TTS API（讯飞 / Claude TTS model），失败则 fallback 到浏览器 SpeechSynthesis
-    const usedTtsApi = await playTtsAudio(text, token);
+    // 使用 MiMo TTS 生成的音频文件播放推荐语
+    await playTtsAudio(text, token);
     if (token !== playRequestToken) return snapshotState();
-
-    if (!usedTtsApi) {
-      refreshVoiceCache();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "zh-CN";
-      const voice = pickVoiceById(ttsVoiceId);
-      if (voice) u.voice = voice;
-      await emitState("speech:start");
-      await new Promise((resolve) => {
-        u.onend = () => resolve();
-        u.onerror = () => resolve();
-        try {
-          window.speechSynthesis.cancel();
-        } catch {}
-        window.speechSynthesis.speak(u);
-      });
-      if (token !== playRequestToken) return snapshotState();
-    }
 
     speechActive = false;
     speechPaused = false;
@@ -681,15 +636,6 @@ bindAudioEvents(audioA);
 bindAudioEvents(audioB);
 resetLyricSegment();
 
-if ("speechSynthesis" in window) {
-  refreshVoiceCache();
-  try {
-    window.speechSynthesis.onvoiceschanged = () => {
-      refreshVoiceCache();
-    };
-  } catch {}
-}
-
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== "object" || msg.target !== "offscreen") return undefined;
   (async () => {
@@ -743,8 +689,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return;
       }
       if (msg.command === "player.setPreferences") {
-        const prefs = msg.preferences && typeof msg.preferences === "object" ? msg.preferences : {};
-        ttsVoiceId = String(prefs.ttsVoiceId || ttsVoiceId || "").trim();
         sendResponse({ ok: true, state: await emitState("player:set-preferences") });
         return;
       }
@@ -758,8 +702,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 (async () => {
-  const prefs = await getPlayerPreferences();
-  ttsVoiceId = String(prefs.ttsVoiceId || "").trim();
+  await getPlayerPreferences();
   await emitState("offscreen:init");
 })();
 

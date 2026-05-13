@@ -62,8 +62,6 @@ const elSettingsStatus = document.getElementById("settingsStatus");
 const elSettingsHint = document.getElementById("settingsHint");
 const elSettingsDjNameInput = document.getElementById("settingsDjNameInput");
 const elSettingsDjNameSave = document.getElementById("settingsDjNameSave");
-const elTtsVoiceCount = document.getElementById("ttsVoiceCount");
-const elTtsVoiceSelect = document.getElementById("ttsVoiceSelect");
 const elSettingsKeepSession = document.getElementById("settingsKeepSession");
 const elSettingsAutoRecommend = document.getElementById("settingsAutoRecommend");
 
@@ -99,10 +97,8 @@ let playerCurrentTime = 0;
 let playerDuration = 0;
 let currentTrack = null;
 
-let ttsVoiceId = "";
 let localAiToolMode = "auto";
 let localAiToolId = "";
-let cachedVoices = [];
 
 let speechActive = false;
 let speechPaused = false;
@@ -802,7 +798,6 @@ function openSettingsPanel() {
   elSettingsPanel.hidden = false;
   refreshOverlayTransientUiState();
   refreshSettingsDjNameUI();
-  void refreshTtsSettingsUI();
   void refreshAiToolSettingsUI();
 }
 
@@ -810,86 +805,6 @@ function closeSettingsPanel() {
   if (!elSettingsPanel) return;
   elSettingsPanel.hidden = true;
   refreshOverlayTransientUiState();
-}
-
-function describeVoice(v) {
-  const name = v?.name ? String(v.name).trim() : "";
-  const lang = v?.lang ? String(v.lang).trim() : "";
-  const local = v?.localService ? "本地" : "云端";
-  const parts = [];
-  if (name) parts.push(name);
-  if (lang) parts.push(lang);
-  parts.push(local);
-  return parts.join(" · ") || "未知音色";
-}
-
-function refreshVoiceCache() {
-  if (!("speechSynthesis" in window)) {
-    cachedVoices = [];
-    return;
-  }
-  const voices = window.speechSynthesis.getVoices();
-  cachedVoices = Array.isArray(voices) ? voices.slice() : [];
-  cachedVoices.sort((a, b) => {
-    const la = String(a?.lang || "");
-    const lb = String(b?.lang || "");
-    if (la !== lb) return la.localeCompare(lb);
-    return String(a?.name || "").localeCompare(String(b?.name || ""));
-  });
-}
-
-function pickVoiceById(voiceId) {
-  const id = String(voiceId || "").trim();
-  if (!id) return null;
-  const byUri = cachedVoices.find((v) => String(v?.voiceURI || "") === id);
-  if (byUri) return byUri;
-  const byName = cachedVoices.find((v) => String(v?.name || "") === id);
-  if (byName) return byName;
-  return null;
-}
-
-async function refreshTtsSettingsUI() {
-  if (!elTtsVoiceSelect || !elSettingsHint) return;
-  if (!("speechSynthesis" in window)) {
-    setSettingsStatus("当前浏览器不支持语音合成");
-    if (elTtsVoiceCount) elTtsVoiceCount.textContent = "";
-    elTtsVoiceSelect.innerHTML = "";
-    elSettingsHint.textContent = "";
-    return;
-  }
-
-  refreshVoiceCache();
-  const zhVoices = cachedVoices.filter((v) => String(v?.lang || "").toLowerCase().startsWith("zh"));
-  const list = zhVoices.length ? zhVoices : cachedVoices;
-
-  elTtsVoiceSelect.innerHTML = "";
-  const optDefault = document.createElement("option");
-  optDefault.value = "";
-  optDefault.textContent = "默认（浏览器/系统）";
-  elTtsVoiceSelect.appendChild(optDefault);
-
-  list.forEach((v) => {
-    const opt = document.createElement("option");
-    opt.value = String(v?.voiceURI || v?.name || "");
-    opt.textContent = describeVoice(v);
-    elTtsVoiceSelect.appendChild(opt);
-  });
-
-  const selected = String(ttsVoiceId || "").trim();
-  elTtsVoiceSelect.value = selected;
-  if (selected && elTtsVoiceSelect.value !== selected) {
-    elTtsVoiceSelect.value = "";
-  }
-
-  setSettingsStatus("");
-  if (elTtsVoiceCount) {
-    elTtsVoiceCount.textContent = list.length ? `（可用音色：${list.length} 个）` : "（未发现可用音色）";
-  }
-  elSettingsHint.textContent = zhVoices.length
-    ? "已优先展示中文音色"
-    : list.length
-      ? "未发现中文音色，已展示全部音色"
-      : "";
 }
 
 async function refreshAiToolSettingsUI(forceRefresh = false) {
@@ -1982,22 +1897,6 @@ if (elSettingsPanel) {
   });
 }
 
-if (elTtsVoiceSelect) {
-  elTtsVoiceSelect.addEventListener("change", async () => {
-    const next = String(elTtsVoiceSelect.value || "").trim();
-    ttsVoiceId = next;
-    try {
-      await patchPreferences({ ttsVoiceId: next });
-      await sendPlayerCommand("player.setPreferences", { preferences: { ttsVoiceId: next } });
-      setHint("已保存口播音色");
-    } catch (e) {
-      const message = e?.message ? String(e.message) : String(e);
-      setHint(`保存失败：${message}`);
-    }
-    await refreshTtsSettingsUI();
-  });
-}
-
 if (elSettingsKeepSession) {
   elSettingsKeepSession.addEventListener("change", async () => {
     const enabled = Boolean(elSettingsKeepSession.checked);
@@ -2135,7 +2034,6 @@ safePost({ type: "ready" });
   await loadTrackVotes();
   setDjNameUI(prefs.djName || "Claudio");
   setAvatarUI(prefs.avatarDataUrl || "");
-  ttsVoiceId = String(prefs.ttsVoiceId || "").trim();
   keepSessionOnClose = prefs.keepSessionOnClose !== false;
   if (elSettingsKeepSession) elSettingsKeepSession.checked = keepSessionOnClose;
   autoRecommendPlay = prefs.autoRecommendPlay !== false;
@@ -2151,15 +2049,6 @@ safePost({ type: "ready" });
     await clearSavedSession();
   }
   await requestPlayerState();
-  if ("speechSynthesis" in window) {
-    refreshVoiceCache();
-    try {
-      window.speechSynthesis.onvoiceschanged = () => {
-        refreshVoiceCache();
-        if (elSettingsPanel && !elSettingsPanel.hidden) void refreshTtsSettingsUI();
-      };
-    } catch {}
-  }
 
   window.addEventListener("pagehide", () => {
     if (keepSessionOnClose) void saveSessionNow();

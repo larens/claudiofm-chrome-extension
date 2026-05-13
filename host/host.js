@@ -536,7 +536,7 @@ function buildSchema() {
           required: ["name", "artist"]
         }
       },
-      segue: { type: "string" },
+      segue: { type: "string", description: "电台 DJ 推荐语，1-2 句话，介绍歌单主题或推荐理由" },
       memory: {
         type: "array",
         items: {
@@ -582,6 +582,7 @@ function buildPrompt(input) {
     "必须输出 JSON，字段遵循给定 schema。",
     "play 数组长度必须在 5 到 10 之间。",
     "每首歌只输出 name/artist；album/query/provider 可选。",
+    "segue 是你在推荐歌单前用电台 DJ 口吻说的一小段推荐语（1-2 句话），介绍接下来的歌单主题或推荐理由，必须输出。",
     "memory 用于写回画像偏好，尽量输出 1-3 条可执行的偏好更新。",
     force ? "这是一次画像自检更新，请务必输出 2-3 条高质量 memory 用于纠偏与巩固偏好。" : ""
   ].filter(Boolean);
