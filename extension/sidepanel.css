@@ -85,6 +85,11 @@ body {
 .topActions .iconBtn {
   --btn-size: 26px;
   --icon-size: 14px;
+  opacity: 0.5;
+}
+
+.topActions .iconBtn:hover {
+  opacity: 0.8;
 }
 
 .memoryPanel {
@@ -617,14 +622,11 @@ button:hover {
 
 .recommendTextarea {
   width: 100%;
-  border: 1px solid var(--borderSoft);
-  background: color-mix(in srgb, CanvasText 3%, Canvas 97%);
+  border: none;
+  background: transparent;
   color: var(--text);
-  border-radius: 12px;
-  padding: 10px 10px;
   font-size: 13px;
   line-height: 1.35;
-  resize: vertical;
 }
 
 .recommendActions {

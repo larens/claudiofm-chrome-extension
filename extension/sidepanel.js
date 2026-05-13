@@ -466,12 +466,11 @@ function showRecommendPush(tracks, defaultSegue) {
 
   const title = document.createElement("div");
   title.className = "recommendTitle";
-  title.textContent = "DJ 推荐语（可编辑），确认后推送并播放新歌单";
+  title.textContent = "新歌单推荐";
 
-  const textarea = document.createElement("textarea");
-  textarea.className = "recommendTextarea";
-  textarea.rows = 3;
-  textarea.value = defaultSegue ? String(defaultSegue) : "";
+  const segueBody = document.createElement("div");
+  segueBody.className = "recommendTextarea";
+  segueBody.textContent = defaultSegue ? String(defaultSegue) : "";
 
   const actions = document.createElement("div");
   actions.className = "recommendActions";
@@ -481,7 +480,7 @@ function showRecommendPush(tracks, defaultSegue) {
   push.type = "button";
   push.textContent = "推送并播放";
   push.addEventListener("click", async () => {
-    const segueText = String(textarea.value || "").trim();
+    const segueText = String(segueBody.textContent || "").trim();
     clearRecommendCard();
     await pushQueue(segueText);
   });
@@ -495,7 +494,7 @@ function showRecommendPush(tracks, defaultSegue) {
   actions.appendChild(push);
   actions.appendChild(cancel);
   wrap.appendChild(title);
-  wrap.appendChild(textarea);
+  wrap.appendChild(segueBody);
   wrap.appendChild(actions);
   recommendCardEl = wrap;
   appendChatNode(wrap);
