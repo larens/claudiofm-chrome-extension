@@ -467,7 +467,7 @@ async function onChat(text, options = {}) {
     type: "chat",
     text,
     lang: currentLang,
-    djName: prefs.djName ?? "Claudio",
+    djName: prefs.djName ?? "Claudefm",
     provider: "paojiao",
     profileSummary: profileSummary ?? "",
     turnCountSinceLastProfileRefresh: nextTurnCount % 3,
@@ -483,7 +483,10 @@ async function onChat(text, options = {}) {
     },
   };
 
-  const resp = await sendNative(payload);
+  const resp = await Promise.race([
+    sendNative(payload),
+    new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: "Host 响应超时，请稍后再试" }), 135000)),
+  ]);
   if (!resp?.ok) {
     const extensionId = chrome.runtime.id;
     const toolLabel = resp?.toolContext?.toolLabel || "本地 AI 工具";
@@ -504,7 +507,7 @@ async function onChat(text, options = {}) {
     try {
       void sendNative({
         type: "optimizeMemoryFile",
-        djName: prefs.djName ?? "Claudio",
+        djName: prefs.djName ?? "Claudefm",
         profileSummary: resp.profileSummary ?? profileSummary ?? "",
         templatePath: MEMORY_TEMPLATE_PATH,
       });
@@ -533,7 +536,7 @@ async function onChat(text, options = {}) {
     try {
       await sendNative({
         type: "optimizeMemoryFile",
-        djName: prefs.djName ?? "Claudio",
+        djName: prefs.djName ?? "Claudefm",
         profileSummary: resp.profileSummary ?? profileSummary ?? "",
         templatePath: MEMORY_TEMPLATE_PATH,
       });
@@ -547,7 +550,7 @@ async function exportMemoryMd() {
   return await sendNative({
     type: "optimizeMemoryFile",
     lang: currentLang,
-    djName: prefs.djName ?? "Claudio",
+    djName: prefs.djName ?? "Claudefm",
     profileSummary: profileSummary ?? "",
     templatePath: MEMORY_TEMPLATE_PATH,
   });
@@ -700,7 +703,7 @@ async function maybeWelcome(port) {
     const payload = {
       type: "welcome",
       lang: currentLang,
-      djName: prefs.djName ?? "Claudio",
+      djName: prefs.djName ?? "Claudefm",
       provider: "paojiao",
       profileSummary: profileSummary ?? "",
       templatePath: MEMORY_TEMPLATE_PATH,
@@ -723,7 +726,7 @@ async function maybeWelcome(port) {
           void sendNative({
             type: "optimizeMemoryFile",
             lang: currentLang,
-            djName: prefs.djName ?? "Claudio",
+            djName: prefs.djName ?? "Claudefm",
             profileSummary: resp.profileSummary ?? profileSummary ?? "",
             templatePath: MEMORY_TEMPLATE_PATH,
           });
@@ -903,7 +906,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             type: "nextBatch",
             lang: currentLang,
             recentTracks: msg.recentTracks || [],
-            djName: prefs.djName ?? "Claudio",
+            djName: prefs.djName ?? "Claudefm",
             provider: "paojiao",
             profileSummary: profileSummary ?? "",
             likedTracks: likedTracks.slice(0, 20),
@@ -1008,7 +1011,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const res = await sendNative({
           type: "lyricInterlude",
           lang: currentLang,
-          djName: prefs.djName ?? "Claudio",
+          djName: prefs.djName ?? "Claudefm",
           profileSummary: profileSummary ?? "",
           tracks,
         });

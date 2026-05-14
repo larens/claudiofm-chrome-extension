@@ -648,8 +648,8 @@ readNativeMessageStream(async (msg) => {
   if (!msg || typeof msg !== "object") return;
   if (msg.type === "optimizeMemoryFile") {
     try {
-      const djRaw = msg.djName ? String(msg.djName) : "Claudio";
-      const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudio";
+      const djRaw = msg.djName ? String(msg.djName) : "Claudefm";
+      const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudefm";
       const summary = msg.profileSummary ? String(msg.profileSummary).trim() : "";
       const templatePath = resolveTemplatePath(msg.templatePath ? String(msg.templatePath) : "");
       if (!templatePath || !fs.existsSync(templatePath)) {
@@ -790,8 +790,8 @@ readNativeMessageStream(async (msg) => {
   if (msg.type === "welcome") {
     try {
       const schema = buildSchema();
-      const djRaw = msg.djName ? String(msg.djName) : "Claudio";
-      const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudio";
+      const djRaw = msg.djName ? String(msg.djName) : "Claudefm";
+      const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudefm";
       const provider = msg.provider || "paojiao";
       const profileSummary = msg.profileSummary ? String(msg.profileSummary) : "";
 
@@ -827,8 +827,8 @@ readNativeMessageStream(async (msg) => {
   }
   if (msg.type === "exportMemoryMd") {
     try {
-      const djRaw = msg.djName ? String(msg.djName) : "Claudio";
-      const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudio";
+      const djRaw = msg.djName ? String(msg.djName) : "Claudefm";
+      const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudefm";
       const summary = msg.profileSummary ? String(msg.profileSummary).trim() : "";
       const folder = getClaudefmFolder();
       const filePath = getMusicFilePath();

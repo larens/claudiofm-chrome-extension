@@ -348,7 +348,7 @@ function runWithLocalAiTool(tool, prompt, schema) {
     }
     return { ok: false, error: `工具 ${tool.label} 当前不可用` };
   }
-  if (tool.id === "claude_code") return runClaude(prompt, schema);
+  if (tool.id === "claude_code") return runClaudeWithRetry(prompt, schema);
   // Future adapters for codex, gemini_cli, etc. go here
   return { ok: false, error: `工具 ${tool.label} 暂无适配器` };
 }
@@ -516,9 +516,9 @@ function applyMemory(profileSummary, memory) {
 }
 
 function buildPrompt(input) {
-  const djRaw = input.djName ?? "Claudio";
+  const djRaw = input.djName ?? "Claudefm";
   let dj = String(djRaw).replace(/\r|\n/g, " ").trim().slice(0, 24);
-  if (!dj) dj = "Claudio";
+  if (!dj) dj = "Claudefm";
   const provider = input.provider || "qq";
   const profile = input.profileSummary || "";
   const scene = input.scene || "";
@@ -608,9 +608,19 @@ function runClaude(prompt, schema) {
     ];
     const env = buildExecEnv();
     const child = spawn(claudePath, args, { stdio: ["ignore", "pipe", "pipe"], env });
+    let settled = false;
     let out = "";
     let err = "";
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { child.kill("SIGTERM"); } catch {}
+      resolve({ ok: false, error: "Claude CLI 响应超时（30s）" });
+    }, 30000);
     child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       const message = e && e.message ? String(e.message) : String(e);
       resolve({
         ok: false,
@@ -624,6 +634,9 @@ function runClaude(prompt, schema) {
       err += d.toString("utf8");
     });
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code !== 0) {
         resolve({ ok: false, error: err || `claude exited ${code}` });
         return;
@@ -637,6 +650,24 @@ function runClaude(prompt, schema) {
       resolve({ ok: true, result: structured });
     });
   });
+}
+
+const CLAUDE_MAX_RETRIES = 3;
+const CLAUDE_RETRY_DELAY_MS = 5000;
+
+async function runClaudeWithRetry(prompt, schema) {
+  let lastErr;
+  for (let attempt = 0; attempt <= CLAUDE_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      console.error(`[claude] retry attempt ${attempt}/${CLAUDE_MAX_RETRIES}`);
+      await new Promise((r) => setTimeout(r, CLAUDE_RETRY_DELAY_MS));
+    }
+    const resp = await runClaude(prompt, schema);
+    if (resp.ok) return resp;
+    lastErr = resp;
+    console.error(`[claude] attempt ${attempt + 1} failed: ${resp.error}`);
+  }
+  return lastErr;
 }
 
 let cachedClaudeModelFlag = undefined;
@@ -1393,8 +1424,8 @@ async function fetchLyricsForTrack(track) {
 }
 
 function buildLyricInterludePrompt(input, tracksWithLyrics) {
-  const djRaw = input && typeof input === "object" ? input.djName ?? "Claudio" : "Claudio";
-  const dj = String(djRaw).replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudio";
+  const djRaw = input && typeof input === "object" ? input.djName ?? "Claudefm" : "Claudefm";
+  const dj = String(djRaw).replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudefm";
   const profile = input && typeof input === "object" ? String(input.profileSummary || "") : "";
   const lang = input && typeof input === "object" ? (input.lang || "zh") : "zh";
   const isEn = lang === "en";
@@ -1800,8 +1831,8 @@ function ensureMusicFile(input) {
 }
 
 function exportMemoryMd(input) {
-  const djRaw = input && input.djName ? String(input.djName) : "Claudio";
-  const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudio";
+  const djRaw = input && input.djName ? String(input.djName) : "Claudefm";
+  const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudefm";
   const summary = input && input.profileSummary ? String(input.profileSummary).trim() : "";
   const folder = getClaudefmFolder();
   const filePath = getMusicFilePath();
@@ -1824,8 +1855,8 @@ function exportMemoryMd(input) {
 }
 
 function optimizeMemoryFile(input) {
-  const djRaw = input && input.djName ? String(input.djName) : "Claudio";
-  const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudio";
+  const djRaw = input && input.djName ? String(input.djName) : "Claudefm";
+  const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudefm";
   const summary = input && input.profileSummary ? String(input.profileSummary).trim() : "";
   const lang = input && input.lang ? String(input.lang) : "zh";
   const isEn = lang === "en";
@@ -2134,8 +2165,8 @@ readNativeMessageStream(async (msg) => {
     if (msg.type === "welcome") {
       const schema = buildSchema();
       const profileSummary = msg.profileSummary ? String(msg.profileSummary) : "";
-      const djRaw = msg.djName ?? "Claudio";
-      const dj = String(djRaw).replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudio";
+      const djRaw = msg.djName ?? "Claudefm";
+      const dj = String(djRaw).replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudefm";
       const provider = msg.provider || "paojiao";
 
       const scene = await buildWelcomeScene(msg.latitude, msg.longitude, profileSummary, msgLang);
@@ -2176,8 +2207,8 @@ readNativeMessageStream(async (msg) => {
     if (msg.type === "nextBatch") {
       const schema = buildSchema();
       const profileSummary = msg.profileSummary ? String(msg.profileSummary) : "";
-      const djRaw = msg.djName ?? "Claudio";
-      const dj = String(djRaw).replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudio";
+      const djRaw = msg.djName ?? "Claudefm";
+      const dj = String(djRaw).replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudefm";
       const provider = msg.provider || "paojiao";
       const likedTracks = Array.isArray(msg.likedTracks) ? msg.likedTracks : [];
       const dislikedTracks = Array.isArray(msg.dislikedTracks) ? msg.dislikedTracks : [];

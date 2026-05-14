@@ -629,10 +629,10 @@ def build_lyric_interlude_schema():
     }
 
 def build_lyric_interlude_prompt(input_data, tracks_with_lyrics):
-    dj_raw = input_data.get("djName", "Claudio")
+    dj_raw = input_data.get("djName", "Claudefm")
     dj = str(dj_raw).replace("\n", " ").replace("\r", " ").strip()[:24]
     if not dj:
-        dj = "Claudio"
+        dj = "Claudefm"
     profile = str(input_data.get("profileSummary", "") or "")
 
     blocks = []
@@ -1437,10 +1437,10 @@ def apply_memory(profile_summary, memory):
     return "\n".join(lines[-200:])
 
 def build_chat_only_prompt(input_data):
-    dj_raw = input_data.get("djName", "Claudio")
+    dj_raw = input_data.get("djName", "Claudefm")
     dj = str(dj_raw).replace("\n", " \u201c).replace(\u201d\r", " ").strip()[:24]
     if not dj:
-        dj = "Claudio"
+        dj = "Claudefm"
     profile = input_data.get("profileSummary", "")
 
     instructions = [
@@ -1462,10 +1462,10 @@ def build_chat_only_prompt(input_data):
     ])
 
 def build_prompt(input_data):
-    dj_raw = input_data.get("djName", "Claudio")
+    dj_raw = input_data.get("djName", "Claudefm")
     dj = str(dj_raw).replace("\n", " ").replace("\r", " ").strip()[:24]
     if not dj:
-        dj = "Claudio"
+        dj = "Claudefm"
     provider = input_data.get("provider", "qq")
     profile = input_data.get("profileSummary", "")
     scene = input_data.get("scene", "")
@@ -1721,7 +1721,7 @@ def export_memory_md(dj_name, profile_summary):
     path = get_music_file_path()
     os.makedirs(folder, exist_ok=True)
 
-    dj = str(dj_name or "Claudio").replace("\n", " ").replace("\r", " ").strip()[:24] or "Claudio"
+    dj = str(dj_name or "Claudefm").replace("\n", " ").replace("\r", " ").strip()[:24] or "Claudefm"
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     summary = str(profile_summary or "").strip()
 
@@ -1769,7 +1769,7 @@ def optimize_memory_file(dj_name, profile_summary, template_path):
     except Exception:
         existing = ""
 
-    dj = str(dj_name or "Claudio").replace("\n", " ").replace("\r", " ").strip()[:24] or "Claudio"
+    dj = str(dj_name or "Claudefm").replace("\n", " ").replace("\r", " ").strip()[:24] or "Claudefm"
     summary = str(profile_summary or "").strip()
 
     prompt = "\n".join([
@@ -2046,7 +2046,7 @@ def main():
             continue
         if mtype == "exportMemoryMd":
             try:
-                resp = export_memory_md(msg.get("djName", "Claudio"), msg.get("profileSummary", ""))
+                resp = export_memory_md(msg.get("djName", "Claudefm"), msg.get("profileSummary", ""))
                 send_message(resp)
             except Exception as e:
                 send_message({"ok": False, "error": str(e)})
@@ -2054,7 +2054,7 @@ def main():
         if mtype == "optimizeMemoryFile":
             try:
                 resp = optimize_memory_file(
-                    msg.get("djName", "Claudio"),
+                    msg.get("djName", "Claudefm"),
                     msg.get("profileSummary", ""),
                     msg.get("templatePath", ""),
                 )
@@ -2105,7 +2105,7 @@ def main():
 
                 scene = build_welcome_scene(lat, lon, profile)
                 payload = {
-                    "djName": msg.get("djName", "Claudio"),
+                    "djName": msg.get("djName", "Claudefm"),
                     "provider": msg.get("provider", "paojiao"),
                     "profileSummary": profile,
                     "scene": scene,

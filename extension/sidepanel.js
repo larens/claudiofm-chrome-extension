@@ -97,7 +97,7 @@ let seeking = false;
 let hintTimer = null;
 let recognizing = false;
 let recognition = null;
-let djName = "Claudio";
+let djName = "Claudefm";
 let preloadIndex = -1;
 let preloadStatus = "idle";
 let playerPlaying = false;
@@ -136,6 +136,7 @@ let pendingAssistantEl = null;
 let pendingAssistantToken = 0;
 let pendingAssistantTimerA = null;
 let pendingAssistantTimerB = null;
+let pendingAssistantTimerC = null;
 
 if (elDjDisplay) elDjDisplay.hidden = false;
 
@@ -376,8 +377,8 @@ function setAvatarUI(avatarDataUrl) {
 }
 
 function setDjNameUI(name) {
-  const raw = name && String(name).trim() ? String(name).trim() : "Claudio";
-  djName = Array.from(raw).slice(0, 8).join("") || "Claudio";
+  const raw = name && String(name).trim() ? String(name).trim() : "Claudefm";
+  djName = Array.from(raw).slice(0, 8).join("") || "Claudefm";
   elDjNameText.textContent = djName;
 }
 
@@ -403,8 +404,10 @@ function clearRecommendCard() {
 function clearPendingAssistant() {
   if (pendingAssistantTimerA) clearTimeout(pendingAssistantTimerA);
   if (pendingAssistantTimerB) clearTimeout(pendingAssistantTimerB);
+  if (pendingAssistantTimerC) clearTimeout(pendingAssistantTimerC);
   pendingAssistantTimerA = null;
   pendingAssistantTimerB = null;
+  pendingAssistantTimerC = null;
   if (pendingAssistantEl && pendingAssistantEl.isConnected) pendingAssistantEl.remove();
   pendingAssistantEl = null;
 }
@@ -424,6 +427,11 @@ function startPendingAssistant() {
     if (!pendingAssistantEl || !pendingAssistantEl.isConnected) return;
     pendingAssistantEl.textContent = __t("回复有点慢，可能在排队/Host 忙，请稍等…");
   }, 25000);
+  pendingAssistantTimerC = setTimeout(() => {
+    if (token !== pendingAssistantToken) return;
+    clearPendingAssistant();
+    appendMessage("assistant", __t("请求超时，请稍后再试"));
+  }, 140000);
 }
 
 function showRecommendConfirm(question) {
@@ -2157,7 +2165,7 @@ safePost({ type: "ready", lang: __lang });
 (async () => {
   const prefs = await getPreferences();
   await loadTrackVotes();
-  setDjNameUI(prefs.djName || "Claudio");
+  setDjNameUI(prefs.djName || "Claudefm");
   setAvatarUI(prefs.avatarDataUrl || "");
   keepSessionOnClose = prefs.keepSessionOnClose !== false;
   if (elSettingsKeepSession) elSettingsKeepSession.checked = keepSessionOnClose;
