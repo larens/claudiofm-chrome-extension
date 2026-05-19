@@ -531,7 +531,8 @@ function buildSchema() {
             album: { type: "string" },
             provider: { type: "string" },
             query: { type: "string" },
-            streamUrl: { type: "string" }
+            streamUrl: { type: "string" },
+            tags: { type: "array", items: { type: "string" }, description: "英文 genre/mood 标签，用于 Jamendo 音源匹配" }
           },
           required: ["name", "artist"]
         }
@@ -581,7 +582,9 @@ function buildPrompt(input) {
     `当前音源来源偏好：${provider}。`,
     "必须输出 JSON，字段遵循给定 schema。",
     "play 数组长度必须在 5 到 10 之间。",
-    "每首歌只输出 name/artist；album/query/provider 可选。",
+    "每首歌输出 name/artist；album/query/provider 可选。",
+    "每首歌还可以输出 tags 数组（英文 genre/mood 标签），用于 Jamendo 音源匹配，如 [\"jazz\", \"relaxing\", \"chill\"]。",
+    "优先根据画像摘要中的曲风偏好推荐同类歌曲，不必追求精确匹配某首歌名。",
     "segue 是你在推荐歌单前用电台 DJ 口吻说的一小段推荐语（1-2 句话），介绍接下来的歌单主题或推荐理由，必须输出。",
     "memory 用于写回画像偏好，尽量输出 1-3 条可执行的偏好更新。",
     force ? "这是一次画像自检更新，请务必输出 2-3 条高质量 memory 用于纠偏与巩固偏好。" : ""
@@ -792,7 +795,7 @@ readNativeMessageStream(async (msg) => {
       const schema = buildSchema();
       const djRaw = msg.djName ? String(msg.djName) : "Claudefm";
       const dj = djRaw.replace(/\r|\n/g, " ").trim().slice(0, 24) || "Claudefm";
-      const provider = msg.provider || "paojiao";
+      const provider = msg.provider || "jamendo";
       const profileSummary = msg.profileSummary ? String(msg.profileSummary) : "";
 
       const detection = detectLocalAiTools();

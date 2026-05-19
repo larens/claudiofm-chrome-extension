@@ -33,6 +33,6 @@
     "geolocation"
   ],
   "host_permissions": [
-    "https://music.pjmp3.com/*"
+    "https://api.jamendo.com/*"
   ]
 }

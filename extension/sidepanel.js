@@ -68,6 +68,8 @@ const elSettingsDjNameInput = document.getElementById("settingsDjNameInput");
 const elSettingsDjNameSave = document.getElementById("settingsDjNameSave");
 const elSettingsKeepSession = document.getElementById("settingsKeepSession");
 const elSettingsAutoRecommend = document.getElementById("settingsAutoRecommend");
+const elSettingsJamendoClientId = document.getElementById("settingsJamendoClientId");
+const elSettingsJamendoClientIdSave = document.getElementById("settingsJamendoClientIdSave");
 
 const elAiToolModeAuto = document.getElementById("aiToolModeAuto");
 const elAiToolModeManual = document.getElementById("aiToolModeManual");
@@ -2268,6 +2270,33 @@ if (elSettingsDjNameInput) {
   });
 }
 
+async function saveJamendoClientIdFromSettings() {
+  if (!elSettingsJamendoClientId) return;
+  const raw = String(elSettingsJamendoClientId.value || "").trim();
+  try {
+    await patchPreferences({ jamendoClientId: raw });
+    setHint(raw ? __t("已保存 Jamendo Client ID") : __t("已清除 Jamendo Client ID"));
+  } catch (e) {
+    const message = e?.message ? String(e.message) : String(e);
+    setHint(__t("保存失败：{0}", {0: message}));
+  }
+}
+
+if (elSettingsJamendoClientIdSave) {
+  elSettingsJamendoClientIdSave.addEventListener("click", async () => {
+    await saveJamendoClientIdFromSettings();
+  });
+}
+
+if (elSettingsJamendoClientId) {
+  elSettingsJamendoClientId.addEventListener("keydown", async (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      await saveJamendoClientIdFromSettings();
+    }
+  });
+}
+
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (elHistoryPanel && !elHistoryPanel.hidden) {
@@ -2295,6 +2324,7 @@ safePost({ type: "ready", lang: __lang });
   if (elSettingsKeepSession) elSettingsKeepSession.checked = keepSessionOnClose;
   autoRecommendPlay = prefs.autoRecommendPlay !== false;
   if (elSettingsAutoRecommend) elSettingsAutoRecommend.checked = autoRecommendPlay;
+  if (elSettingsJamendoClientId) elSettingsJamendoClientId.value = prefs.jamendoClientId || "";
   localAiToolMode = prefs.localAiToolMode || "auto";
   localAiToolId = prefs.localAiToolId || "";
   if (elAiToolModeAuto) elAiToolModeAuto.checked = localAiToolMode === "auto";

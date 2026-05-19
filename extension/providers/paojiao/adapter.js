@@ -27,96 +27,60 @@ function scoreResolvedTrack(query, candidate) {
   return score;
 }
 
-function extractSongIds(searchHtml) {
-  const ids = [];
-  const seen = new Set();
-  const matches = searchHtml.matchAll(/song\.php\?id=(\d+)/g);
-  for (const match of matches) {
-    const id = match?.[1] ? String(match[1]).trim() : "";
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    ids.push(id);
-    if (ids.length >= 5) break;
-  }
-  return ids;
-}
-
-function parseSongPage(songHtml, fallbackTrack) {
-  const urlMatch = songHtml.match(/url\s*:\s*[`'"]([^`'"]+)[`'"]/i);
-  const nameMatch = songHtml.match(/(?:name|title)\s*:\s*[`'"]([^`'"]+)[`'"]/i);
-  const artistMatch = songHtml.match(/artist\s*:\s*[`'"]([^`'"]+)[`'"]/i);
-  const coverMatch = songHtml.match(/cover\s*:\s*[`'"]([^`'"]+)[`'"]/i);
-
-  const streamUrl = cleanProviderValue(urlMatch?.[1] || "");
-  const name = cleanProviderValue(nameMatch?.[1] || fallbackTrack?.name || "");
-  const artist = cleanProviderValue(artistMatch?.[1] || fallbackTrack?.artist || "");
-  const cover = cleanProviderValue(coverMatch?.[1] || "");
-
-  if (!streamUrl) return null;
-
-  return {
-    provider: "paojiao",
-    track: { name, artist },
-    streamUrl,
-    cover,
-    durationMs: 0,
-  };
-}
-
 async function resolveTrack(track) {
   const name = String(track?.name || track?.query || "").trim();
   const artist = String(track?.artist || "").trim();
-  console.log("[paojiao adapter] resolveTrack", { name, artist, track });
+  console.log("[jamendo adapter] resolveTrack", { name, artist });
   if (!name) return null;
 
   try {
-    const searchQuery = encodeURIComponent([name, artist].filter(Boolean).join(" "));
-    console.log("[paojiao adapter] search URL", `https://music.pjmp3.com/search.php?keyword=${searchQuery}&n=1`);
-    const searchResp = await fetch(`https://music.pjmp3.com/search.php?keyword=${searchQuery}&n=1`);
-    if (!searchResp.ok) { console.log("[paojiao adapter] search failed", searchResp.status); return null; }
-    const searchHtml = await searchResp.text();
+    const { preferences } = await chrome.storage.local.get("preferences");
+    const clientId = preferences?.jamendoClientId || "";
+    if (!clientId) {
+      console.warn("[jamendo adapter] client_id not configured");
+      return null;
+    }
 
-    const songIds = extractSongIds(searchHtml);
-    if (!songIds.length) { console.log("[paojiao adapter] no song ID found"); return null; }
+    const query = [name, artist].filter(Boolean).join(" ");
+    const searchUrl = `https://api.jamendo.com/v3.0/tracks/?client_id=${encodeURIComponent(clientId)}&format=json&limit=10&search=${encodeURIComponent(query)}&include=musicinfo&audioformat=mp31&order=popularity_total`;
+    console.log("[jamendo adapter] search URL", searchUrl);
+
+    const resp = await fetch(searchUrl);
+    if (!resp.ok) { console.log("[jamendo adapter] search failed", resp.status); return null; }
+    const data = await resp.json();
+    if (data.headers?.status !== "success" || !data.results?.length) { console.log("[jamendo adapter] no results"); return null; }
 
     let bestResult = null;
     let bestScore = -1;
 
-    for (const songId of songIds) {
-      console.log("[paojiao adapter] songId:", songId);
-      const songResp = await fetch(`https://music.pjmp3.com/song.php?id=${songId}`);
-      if (!songResp.ok) { console.log("[paojiao adapter] song fetch failed", songId); continue; }
-      const songHtml = await songResp.text();
-      const parsed = parseSongPage(songHtml, { name, artist });
-      if (!parsed?.streamUrl) continue;
-
-      const score = scoreResolvedTrack({ name, artist }, parsed.track);
-      console.log("[paojiao adapter] matches", {
-        songId,
+    for (const t of data.results) {
+      const candidate = { name: t.name || "", artist: t.artist_name || "" };
+      const score = scoreResolvedTrack({ name, artist }, candidate);
+      console.log("[jamendo adapter] match", {
+        jamendoId: t.id,
         score,
-        url: parsed.streamUrl,
-        name: parsed.track.name,
-        artist: parsed.track.artist,
-        cover: parsed.cover,
+        streamUrl: t.audio,
+        resolvedName: candidate.name,
+        resolvedArtist: candidate.artist,
       });
 
       if (score > bestScore) {
         bestScore = score;
-        bestResult = parsed;
+        bestResult = {
+          provider: "jamendo",
+          track: candidate,
+          streamUrl: t.audio || "",
+          cover: t.image || "",
+          durationMs: (t.duration || 0) * 1000,
+        };
       }
 
       if (score >= 18) break;
     }
 
-    return bestResult ? {
-      provider: bestResult.provider,
-      track: bestResult.track,
-      streamUrl: bestResult.streamUrl,
-      cover: bestResult.cover,
-      durationMs: bestResult.durationMs,
-    } : null;
+    return bestResult?.streamUrl ? bestResult : null;
   } catch (e) {
-    console.error("[paojiao adapter] error", e);
+    console.error("[jamendo adapter] error", e);
     return null;
   }
 }
@@ -127,7 +91,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   resolveTrack(msg.track)
     .then((result) => sendResponse(result ?? null))
     .catch((error) => {
-      console.error("[paojiao adapter] message resolve failed", error);
+      console.error("[jamendo adapter] message resolve failed", error);
       sendResponse(null);
     });
 

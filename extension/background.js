@@ -210,109 +210,63 @@ function scoreResolvedTrack(query, candidate) {
   return score;
 }
 
-function extractSongIds(searchHtml) {
-  const ids = [];
-  const seen = new Set();
-  const matches = searchHtml.matchAll(/song\.php\?id=(\d+)/g);
-  for (const match of matches) {
-    const id = match?.[1] ? String(match[1]).trim() : "";
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    ids.push(id);
-    if (ids.length >= 5) break;
-  }
-  return ids;
-}
-
-function parseSongPage(songHtml, fallbackTrack) {
-  const urlMatch = songHtml.match(/url\s*:\s*[`'"]([^`'"]+)[`'"]/i);
-  const nameMatch = songHtml.match(/(?:name|title)\s*:\s*[`'"]([^`'"]+)[`'"]/i);
-  const artistMatch = songHtml.match(/artist\s*:\s*[`'"]([^`'"]+)[`'"]/i);
-  const coverMatch = songHtml.match(/cover\s*:\s*[`'"]([^`'"]+)[`'"]/i);
-
-  const streamUrl = cleanProviderValue(urlMatch?.[1] || "");
-  const name = cleanProviderValue(nameMatch?.[1] || fallbackTrack?.name || "");
-  const artist = cleanProviderValue(artistMatch?.[1] || fallbackTrack?.artist || "");
-  const cover = cleanProviderValue(coverMatch?.[1] || "");
-
-  if (!streamUrl) return null;
-
-  return {
-    provider: "paojiao",
-    track: { name, artist },
-    streamUrl,
-    cover,
-    durationMs: 0,
-  };
-}
-
 async function resolveTrackViaFetch(track) {
   const { name, artist } = normalizeTrackQuery(track);
-  if (!name) return null;
+  const prefs = await getPreferences();
+  const clientId = prefs.jamendoClientId || "";
+  if (!clientId) {
+    console.warn("[background] Jamendo client_id not configured");
+    return null;
+  }
+
+  const query = [name, artist].filter(Boolean).join(" ");
+  if (!query) return null;
 
   try {
-    const searchQuery = encodeURIComponent([name, artist].filter(Boolean).join(" "));
-    const searchUrl = `https://music.pjmp3.com/search.php?keyword=${searchQuery}&n=1`;
-    console.log("[background] resolveTrackViaFetch search", { name, artist, searchUrl });
+    const searchUrl = `https://api.jamendo.com/v3.0/tracks/?client_id=${encodeURIComponent(clientId)}&format=json&limit=10&search=${encodeURIComponent(query)}&include=musicinfo&audioformat=mp31&order=popularity_total`;
+    console.log("[background] resolveTrackViaFetch Jamendo search", { name, artist });
 
-    const searchResp = await fetch(searchUrl, {
-      credentials: "include",
-      headers: {
-        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-    });
-    if (!searchResp.ok) {
-      console.warn("[background] search failed", searchResp.status, { name, artist });
+    const resp = await fetch(searchUrl);
+    if (!resp.ok) {
+      console.warn("[background] Jamendo search failed", resp.status, { name, artist });
       return null;
     }
 
-    const searchHtml = await searchResp.text();
-    const songIds = extractSongIds(searchHtml);
-    if (!songIds.length) {
-      console.warn("[background] no song ID found", { name, artist });
+    const data = await resp.json();
+    if (data.headers?.status !== "success" || !data.results?.length) {
+      console.warn("[background] Jamendo no results", { name, artist });
       return null;
     }
 
     let bestResult = null;
     let bestScore = -1;
 
-    for (const songId of songIds) {
-      const songUrl = `https://music.pjmp3.com/song.php?id=${songId}`;
-      console.log("[background] resolveTrackViaFetch song", { songId, songUrl, name, artist });
-
-      const songResp = await fetch(songUrl, {
-        credentials: "include",
-        headers: {
-          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        },
-      });
-      if (!songResp.ok) {
-        console.warn("[background] song fetch failed", songResp.status, { songId, name, artist });
-        continue;
-      }
-
-      const songHtml = await songResp.text();
-      const parsed = parseSongPage(songHtml, { name, artist });
-      if (!parsed?.streamUrl) continue;
-
-      const score = scoreResolvedTrack({ name, artist }, parsed.track);
-      console.log("[background] resolveTrackViaFetch matches", {
-        songId,
+    for (const t of data.results) {
+      const candidate = { name: t.name || "", artist: t.artist_name || "" };
+      const score = scoreResolvedTrack({ name, artist }, candidate);
+      console.log("[background] resolveTrackViaFetch Jamendo match", {
+        jamendoId: t.id,
         score,
-        streamUrl: parsed.streamUrl,
-        resolvedName: parsed.track.name,
-        resolvedArtist: parsed.track.artist,
+        streamUrl: t.audio,
+        resolvedName: candidate.name,
+        resolvedArtist: candidate.artist,
       });
 
       if (score > bestScore) {
         bestScore = score;
-        bestResult = parsed;
+        bestResult = {
+          provider: "jamendo",
+          track: candidate,
+          streamUrl: t.audio || "",
+          cover: t.image || "",
+          durationMs: (t.duration || 0) * 1000,
+        };
       }
 
       if (score >= 18) break;
     }
 
-    return bestResult;
+    return bestResult?.streamUrl ? bestResult : null;
   } catch (error) {
     console.error("[background] resolveTrackViaFetch error", error, { name, artist });
     return null;
@@ -336,6 +290,14 @@ async function validateStreamUrl(url) {
 }
 
 async function resolveTrackWithFallback(track) {
+  try {
+    const prefs = await getPreferences();
+    if (!prefs.jamendoClientId) {
+      console.warn("[background] Jamendo client_id not configured, skipping resolution");
+      return null;
+    }
+  } catch {}
+
   try {
     const query = normalizeTrackQuery(track);
     if (query?.name && query?.artist) {
@@ -426,7 +388,7 @@ async function onChat(text, options = {}) {
     text,
     lang: currentLang,
     djName: prefs.djName ?? "Claudefm",
-    provider: "paojiao",
+    provider: "jamendo",
     profileSummary: profileSummary ?? "",
     turnCountSinceLastProfileRefresh: nextTurnCount % 3,
     forceProfileRefresh: nextTurnCount % 3 === 0,
@@ -663,7 +625,7 @@ async function maybeWelcome(port) {
       type: "welcome",
       lang: currentLang,
       djName: prefs.djName ?? "Claudefm",
-      provider: "paojiao",
+      provider: "jamendo",
       profileSummary: profileSummary ?? "",
       templatePath: MEMORY_TEMPLATE_PATH,
       latitude: hasCoords ? lat : null,
@@ -865,7 +827,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             lang: currentLang,
             recentTracks: msg.recentTracks || [],
             djName: prefs.djName ?? "Claudefm",
-            provider: "paojiao",
+            provider: "jamendo",
             profileSummary: profileSummary ?? "",
             likedTracks: likedTracks.slice(0, 20),
             dislikedTracks: dislikedTracks.slice(0, 20),

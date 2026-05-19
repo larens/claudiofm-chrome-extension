@@ -49,7 +49,7 @@ Claudefm is a Chromium Side Panel extension that turns chat, playlist recommenda
            │
            │ Provider Tab / Fetch
            ▼
-      https://music.pjmp3.com/*         Claudefm data dir
+      https://api.jamendo.com/*           Claudefm data dir
 
   Podcast URL fetch priority:
   1. Direct HTTP fetch (silent, no visible tab)
